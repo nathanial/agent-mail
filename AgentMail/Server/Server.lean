@@ -6,6 +6,7 @@ import AgentMail.Config
 import AgentMail.Protocol.JsonRpc
 import AgentMail.Storage.Database
 import AgentMail.Tools.Identity
+import AgentMail.Tools.Messaging
 
 open Citadel
 
@@ -42,6 +43,11 @@ def handleRpc (db : Storage.Database) (cfg : Config) (req : ServerRequest) : IO 
         | "ensure_project" => Tools.Identity.handleEnsureProject db rpcReq
         | "register_agent" => Tools.Identity.handleRegisterAgent db rpcReq
         | "whois" => Tools.Identity.handleWhois db rpcReq
+        | "send_message" => Tools.Messaging.handleSendMessage db rpcReq
+        | "reply_message" => Tools.Messaging.handleReplyMessage db rpcReq
+        | "fetch_inbox" => Tools.Messaging.handleFetchInbox db rpcReq
+        | "mark_message_read" => Tools.Messaging.handleMarkRead db rpcReq
+        | "acknowledge_message" => Tools.Messaging.handleAcknowledge db rpcReq
         | _ =>
           let err := JsonRpc.Error.methodNotFound rpcReq.method
           let resp := JsonRpc.Response.failure rpcReq.id err

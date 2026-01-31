@@ -13,6 +13,7 @@ structure Message where
   senderId : Nat
   subject : String
   bodyMd : String
+  attachments : Array String
   importance : Importance
   ackRequired : Bool
   threadId : Option String
@@ -28,6 +29,7 @@ instance : Lean.ToJson Message where
     ("sender_id", Lean.Json.num m.senderId),
     ("subject", Lean.Json.str m.subject),
     ("body_md", Lean.Json.str m.bodyMd),
+    ("attachments", Lean.toJson m.attachments),
     ("importance", Lean.toJson m.importance),
     ("ack_required", Lean.Json.bool m.ackRequired),
     ("thread_id", match m.threadId with
@@ -43,6 +45,9 @@ instance : Lean.FromJson Message where
     let senderId ← j.getObjValAs? Nat "sender_id"
     let subject ← j.getObjValAs? String "subject"
     let bodyMd ← j.getObjValAs? String "body_md"
+    let attachments := match j.getObjValAs? (Array String) "attachments" with
+      | Except.ok arr => arr
+      | Except.error _ => #[]
     let importance ← j.getObjValAs? Importance "importance"
     let ackRequired ← j.getObjValAs? Bool "ack_required"
     let threadId : Option String := match j.getObjVal? "thread_id" with
@@ -55,6 +60,7 @@ instance : Lean.FromJson Message where
       senderId := senderId
       subject := subject
       bodyMd := bodyMd
+      attachments := attachments
       importance := importance
       ackRequired := ackRequired
       threadId := threadId

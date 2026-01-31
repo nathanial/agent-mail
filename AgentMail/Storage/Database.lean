@@ -2,9 +2,11 @@
   AgentMail.Storage.Database - SQLite database connection and schema
 -/
 import Quarry
+import Lean.Data.Json
 import Chronos
 import AgentMail.Models.Project
 import AgentMail.Models.Agent
+import AgentMail.Models.Message
 import AgentMail.Models.Types
 
 namespace AgentMail.Storage
@@ -41,6 +43,7 @@ def schema : Array String := #[
     sender_id INTEGER NOT NULL REFERENCES agents(id),
     subject TEXT NOT NULL,
     body_md TEXT NOT NULL,
+    attachments TEXT DEFAULT '[]',
     importance TEXT DEFAULT 'normal',
     ack_required INTEGER DEFAULT 0,
     thread_id TEXT,
@@ -88,6 +91,19 @@ structure Database where
 
 namespace Database
 
+/-- Ensure the messages table includes an attachments column. -/
+def ensureMessageAttachmentsColumn (db : Database) : IO Unit := do
+  let rows ← db.conn.query "PRAGMA table_info(messages)"
+  let mut hasAttachments := false
+  for row in rows do
+    match row.get? 1 with
+    | some (Quarry.Value.text name) =>
+      if name == "attachments" then
+        hasAttachments := true
+    | _ => pure ()
+  if !hasAttachments then
+    db.conn.execSqlDdl "ALTER TABLE messages ADD COLUMN attachments TEXT DEFAULT '[]'"
+
 /-- Open a database connection and initialize schema -/
 def openFile (path : String) : IO Database := do
   let conn ← Quarry.Database.openFile path
@@ -98,7 +114,9 @@ def openFile (path : String) : IO Database := do
   -- Initialize schema
   for stmt in schema do
     conn.execSqlDdl stmt
-  pure { conn, path }
+  let db : Database := { conn, path }
+  ensureMessageAttachmentsColumn db
+  pure db
 
 /-- Open an in-memory database (for testing) -/
 def openMemory : IO Database := do
@@ -108,7 +126,9 @@ def openMemory : IO Database := do
   -- Initialize schema
   for stmt in schema do
     conn.execSqlDdl stmt
-  pure { conn, path := ":memory:" }
+  let db : Database := { conn, path := ":memory:" }
+  ensureMessageAttachmentsColumn db
+  pure db
 
 /-- Close the database connection -/
 def close (db : Database) : IO Unit :=
@@ -266,6 +286,165 @@ def updateAgentProfile (db : Database) (agent : AgentMail.Agent) : IO Unit := do
   let attachStr := agent.attachmentsPolicy.toString
   let _ ← db.modify s!"UPDATE agents SET program = '{programEsc}', model = '{modelEsc}', task_description = '{taskEsc}', attachments_policy = '{attachStr}', last_active_ts = {agent.lastActiveTs.seconds} WHERE id = {agent.id}"
   pure ()
+
+-- =============================================================================
+-- Message queries
+-- =============================================================================
+
+/-- Insert a new message and return its ID -/
+def insertMessage (db : Database) (msg : AgentMail.Message) : IO Nat := do
+  let subjectEsc := msg.subject.replace "'" "''"
+  let bodyEsc := msg.bodyMd.replace "'" "''"
+  let attachmentsJson := Lean.Json.compress (Lean.toJson msg.attachments)
+  let attachmentsEsc := attachmentsJson.replace "'" "''"
+  let importanceStr := msg.importance.toString
+  let ackRequired := if msg.ackRequired then 1 else 0
+  let threadIdSql := match msg.threadId with
+    | some t => s!"'{t.replace "'" "''"}'"
+    | none => "NULL"
+  let id ← db.insert s!"INSERT INTO messages (project_id, sender_id, subject, body_md, attachments, importance, ack_required, thread_id, created_ts) VALUES ({msg.projectId}, {msg.senderId}, '{subjectEsc}', '{bodyEsc}', '{attachmentsEsc}', '{importanceStr}', {ackRequired}, {threadIdSql}, {msg.createdTs.seconds})"
+  pure id.toNat
+
+/-- Insert a message recipient -/
+def insertMessageRecipient (db : Database) (rec : AgentMail.MessageRecipient) : IO Unit := do
+  let typeStr := rec.recipientType.toString
+  let _ ← db.insert s!"INSERT INTO message_recipients (message_id, agent_id, recipient_type) VALUES ({rec.messageId}, {rec.agentId}, '{typeStr}')"
+  pure ()
+
+/-- Query a message by its ID -/
+def queryMessageById (db : Database) (id : Nat) : IO (Option AgentMail.Message) := do
+  let row ← db.queryOne s!"SELECT id, project_id, sender_id, subject, body_md, attachments, importance, ack_required, thread_id, created_ts FROM messages WHERE id = {id}"
+  pure (row.bind rowToMessage)
+where
+  rowToMessage (row : Quarry.Row) : Option AgentMail.Message := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let projectId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let senderId ← row.get? 2 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let subject ← row.get? 3 >>= fun v => match v with | .text s => some s | _ => none
+    let bodyMd ← row.get? 4 >>= fun v => match v with | .text s => some s | _ => none
+    let attachmentsRaw ← row.get? 5 >>= fun v => match v with | .text s => some s | _ => none
+    let importanceStr ← row.get? 6 >>= fun v => match v with | .text s => some s | _ => none
+    let ackRequiredInt ← row.get? 7 >>= fun v => match v with | .integer n => some n | _ => none
+    let threadId : Option String := row.get? 8 >>= fun v => match v with | .text s => some s | _ => none
+    let createdTs ← row.get? 9 >>= fun v => match v with | .integer n => some n | _ => none
+    let importance := AgentMail.Importance.fromString? importanceStr |>.getD .normal
+    let attachments :=
+      match Lean.Json.parse attachmentsRaw with
+      | Except.ok json =>
+        match json.getArr? with
+        | Except.ok arr => arr.filterMap (fun v => v.getStr?.toOption)
+        | Except.error _ => #[]
+      | Except.error _ => #[]
+    some {
+      id, projectId, senderId, subject, bodyMd, importance,
+      ackRequired := ackRequiredInt != 0,
+      threadId,
+      attachments,
+      createdTs := Chronos.Timestamp.fromSeconds createdTs
+    }
+
+/-- Inbox entry for query results -/
+structure InboxEntry where
+  id : Nat
+  senderName : String
+  subject : String
+  importance : AgentMail.Importance
+  ackRequired : Bool
+  threadId : Option String
+  createdTs : Chronos.Timestamp
+  readAt : Option Chronos.Timestamp
+  ackedAt : Option Chronos.Timestamp
+  bodyMd : Option String
+  recipientType : AgentMail.RecipientType
+  deriving Repr
+
+instance : Inhabited InboxEntry where
+  default := {
+    id := 0
+    senderName := ""
+    subject := ""
+    importance := .normal
+    ackRequired := false
+    threadId := none
+    createdTs := Chronos.Timestamp.fromSeconds 0
+    readAt := none
+    ackedAt := none
+    bodyMd := none
+    recipientType := .toRecipient
+  }
+
+/-- Query inbox messages for an agent -/
+def queryInbox (db : Database) (projectId agentId : Nat) (limit : Nat) (urgentOnly : Bool) (sinceTsOpt : Option Int) : IO (Array InboxEntry) := do
+  let urgentClause := if urgentOnly then " AND m.importance IN ('high', 'urgent')" else ""
+  let sinceClause := match sinceTsOpt with
+    | some ts => s!" AND m.created_ts > {ts}"
+    | none => ""
+  let sql := s!"SELECT m.id, a.name, m.subject, m.importance, m.ack_required, m.thread_id, m.created_ts, m.body_md, r.read_at, r.acked_at, r.recipient_type FROM messages m JOIN message_recipients r ON m.id = r.message_id JOIN agents a ON m.sender_id = a.id WHERE m.project_id = {projectId} AND r.agent_id = {agentId}{urgentClause}{sinceClause} ORDER BY m.created_ts DESC LIMIT {limit}"
+  let rows ← db.query sql
+  pure (rows.filterMap rowToInboxEntry)
+where
+  rowToInboxEntry (row : Quarry.Row) : Option InboxEntry := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let senderName ← row.get? 1 >>= fun v => match v with | .text s => some s | _ => none
+    let subject ← row.get? 2 >>= fun v => match v with | .text s => some s | _ => none
+    let importanceStr ← row.get? 3 >>= fun v => match v with | .text s => some s | _ => none
+    let ackRequiredInt ← row.get? 4 >>= fun v => match v with | .integer n => some n | _ => none
+    let threadId : Option String := row.get? 5 >>= fun v => match v with | .text s => some s | _ => none
+    let createdTs ← row.get? 6 >>= fun v => match v with | .integer n => some n | _ => none
+    let bodyMd : Option String := row.get? 7 >>= fun v => match v with | .text s => some s | _ => none
+    let readAt : Option Int := row.get? 8 >>= fun v => match v with | .integer n => some n | _ => none
+    let ackedAt : Option Int := row.get? 9 >>= fun v => match v with | .integer n => some n | _ => none
+    let recipientTypeStr ← row.get? 10 >>= fun v => match v with | .text s => some s | _ => none
+    let importance := AgentMail.Importance.fromString? importanceStr |>.getD .normal
+    let recipientType := AgentMail.RecipientType.fromString? recipientTypeStr |>.getD .toRecipient
+    some {
+      id, senderName, subject, importance,
+      ackRequired := ackRequiredInt != 0,
+      threadId,
+      createdTs := Chronos.Timestamp.fromSeconds createdTs,
+      readAt := readAt.map Chronos.Timestamp.fromSeconds,
+      ackedAt := ackedAt.map Chronos.Timestamp.fromSeconds,
+      bodyMd,
+      recipientType
+    }
+
+/-- Update read_at timestamp for a message recipient -/
+def updateMessageReadAt (db : Database) (messageId agentId : Nat) (ts : Chronos.Timestamp) : IO Bool := do
+  let affected ← db.modify s!"UPDATE message_recipients SET read_at = {ts.seconds} WHERE message_id = {messageId} AND agent_id = {agentId} AND read_at IS NULL"
+  pure (affected > 0)
+
+/-- Update acked_at timestamp for a message recipient -/
+def updateMessageAckedAt (db : Database) (messageId agentId : Nat) (ts : Chronos.Timestamp) : IO Bool := do
+  let affected ← db.modify s!"UPDATE message_recipients SET acked_at = {ts.seconds} WHERE message_id = {messageId} AND agent_id = {agentId} AND acked_at IS NULL"
+  pure (affected > 0)
+
+/-- Query recipient status for a specific message and agent -/
+def queryRecipientStatus (db : Database) (messageId agentId : Nat) : IO (Option AgentMail.MessageRecipient) := do
+  let row ← db.queryOne s!"SELECT message_id, agent_id, recipient_type, read_at, acked_at FROM message_recipients WHERE message_id = {messageId} AND agent_id = {agentId}"
+  pure (row.bind rowToRecipient)
+where
+  rowToRecipient (row : Quarry.Row) : Option AgentMail.MessageRecipient := do
+    let messageId ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let agentId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let typeStr ← row.get? 2 >>= fun v => match v with | .text s => some s | _ => none
+    let readAt : Option Int := row.get? 3 >>= fun v => match v with | .integer n => some n | _ => none
+    let ackedAt : Option Int := row.get? 4 >>= fun v => match v with | .integer n => some n | _ => none
+    let recipientType := AgentMail.RecipientType.fromString? typeStr |>.getD .toRecipient
+    some {
+      messageId, agentId, recipientType,
+      readAt := readAt.map Chronos.Timestamp.fromSeconds,
+      ackedAt := ackedAt.map Chronos.Timestamp.fromSeconds
+    }
+
+/-- Count total messages in inbox for an agent -/
+def countInbox (db : Database) (projectId agentId : Nat) : IO Nat := do
+  let row ← db.queryOne s!"SELECT COUNT(*) FROM messages m JOIN message_recipients r ON m.id = r.message_id WHERE m.project_id = {projectId} AND r.agent_id = {agentId}"
+  match row with
+  | some r =>
+    match r.get? 0 with
+    | some (.integer n) => pure n.toNat
+    | _ => pure 0
+  | none => pure 0
 
 end Database
 
