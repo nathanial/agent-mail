@@ -12,6 +12,7 @@ import AgentMail.Models.ContactRequest
 import AgentMail.Models.Contact
 import AgentMail.Models.FileReservation
 import AgentMail.Models.BuildSlot
+import AgentMail.Models.Product
 
 namespace AgentMail.Storage
 
@@ -111,6 +112,22 @@ def schema : Array String := #[
     UNIQUE(project_id, agent_id_1, agent_id_2)
   )",
 
+  -- Products table (for cross-project namespaces)
+  "CREATE TABLE IF NOT EXISTS products (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL
+  )",
+
+  -- Product-project links
+  "CREATE TABLE IF NOT EXISTS product_projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_db_id INTEGER NOT NULL REFERENCES products(id),
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    linked_at INTEGER NOT NULL,
+    UNIQUE(product_db_id, project_id)
+  )",
+
   -- Indexes for performance
   "CREATE INDEX IF NOT EXISTS idx_agents_project ON agents(project_id)",
   "CREATE INDEX IF NOT EXISTS idx_messages_project ON messages(project_id)",
@@ -125,7 +142,9 @@ def schema : Array String := #[
   "CREATE INDEX IF NOT EXISTS idx_contact_requests_to ON contact_requests(to_agent_id)",
   "CREATE INDEX IF NOT EXISTS idx_contact_requests_from ON contact_requests(from_agent_id)",
   "CREATE INDEX IF NOT EXISTS idx_contacts_agent1 ON contacts(agent_id_1)",
-  "CREATE INDEX IF NOT EXISTS idx_contacts_agent2 ON contacts(agent_id_2)"
+  "CREATE INDEX IF NOT EXISTS idx_contacts_agent2 ON contacts(agent_id_2)",
+  "CREATE INDEX IF NOT EXISTS idx_product_projects_product ON product_projects(product_db_id)",
+  "CREATE INDEX IF NOT EXISTS idx_product_projects_project ON product_projects(project_id)"
 ]
 
 /-- Database connection wrapper -/
@@ -981,6 +1000,129 @@ def releaseExpiredBuildSlots (db : Database) (projectId : Nat) (slotName : Strin
   let slotEsc := slotName.replace "'" "''"
   let affected ← db.modify s!"UPDATE build_slots SET released_ts = {now.seconds} WHERE project_id = {projectId} AND slot_name = '{slotEsc}' AND released_ts IS NULL AND expires_ts <= {now.seconds}"
   pure affected.toNat
+
+-- =============================================================================
+-- Product queries
+-- =============================================================================
+
+/-- Insert a new product and return its ID -/
+def insertProduct (db : Database) (productId : String) (createdAt : Chronos.Timestamp) : IO Nat := do
+  let productIdEsc := productId.replace "'" "''"
+  let id ← db.insert s!"INSERT INTO products (product_id, created_at) VALUES ('{productIdEsc}', {createdAt.seconds})"
+  pure id.toNat
+
+/-- Query a product by its string ID -/
+def queryProductByProductId (db : Database) (productId : String) : IO (Option AgentMail.Product) := do
+  let productIdEsc := productId.replace "'" "''"
+  let row ← db.queryOne s!"SELECT id, product_id, created_at FROM products WHERE product_id = '{productIdEsc}'"
+  pure (row.bind rowToProduct)
+where
+  rowToProduct (row : Quarry.Row) : Option AgentMail.Product := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let productId ← row.get? 1 >>= fun v => match v with | .text s => some s | _ => none
+    let createdAt ← row.get? 2 >>= fun v => match v with | .integer n => some n | _ => none
+    some { id, productId, createdAt := Chronos.Timestamp.fromSeconds createdAt }
+
+/-- Query a product by its database ID -/
+def queryProductById (db : Database) (id : Nat) : IO (Option AgentMail.Product) := do
+  let row ← db.queryOne s!"SELECT id, product_id, created_at FROM products WHERE id = {id}"
+  pure (row.bind rowToProduct)
+where
+  rowToProduct (row : Quarry.Row) : Option AgentMail.Product := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let productId ← row.get? 1 >>= fun v => match v with | .text s => some s | _ => none
+    let createdAt ← row.get? 2 >>= fun v => match v with | .integer n => some n | _ => none
+    some { id, productId, createdAt := Chronos.Timestamp.fromSeconds createdAt }
+
+/-- Insert a product-project link and return its ID -/
+def insertProductProject (db : Database) (productDbId projectId : Nat) (linkedAt : Chronos.Timestamp) : IO Nat := do
+  let id ← db.insert s!"INSERT INTO product_projects (product_db_id, project_id, linked_at) VALUES ({productDbId}, {projectId}, {linkedAt.seconds})"
+  pure id.toNat
+
+/-- Query a product-project link -/
+def queryProductProjectLink (db : Database) (productDbId projectId : Nat) : IO (Option AgentMail.ProductProject) := do
+  let row ← db.queryOne s!"SELECT id, product_db_id, project_id, linked_at FROM product_projects WHERE product_db_id = {productDbId} AND project_id = {projectId}"
+  pure (row.bind rowToProductProject)
+where
+  rowToProductProject (row : Quarry.Row) : Option AgentMail.ProductProject := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let productDbId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let projectId ← row.get? 2 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let linkedAt ← row.get? 3 >>= fun v => match v with | .integer n => some n | _ => none
+    some { id, productDbId, projectId, linkedAt := Chronos.Timestamp.fromSeconds linkedAt }
+
+/-- Query all projects linked to a product -/
+def queryProjectsByProduct (db : Database) (productDbId : Nat) : IO (Array AgentMail.Project) := do
+  let rows ← db.query s!"SELECT p.id, p.slug, p.human_key, p.created_at FROM projects p JOIN product_projects pp ON p.id = pp.project_id WHERE pp.product_db_id = {productDbId} ORDER BY pp.linked_at"
+  pure (rows.filterMap rowToProject)
+where
+  rowToProject (row : Quarry.Row) : Option AgentMail.Project := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let slug ← row.get? 1 >>= fun v => match v with | .text s => some s | _ => none
+    let humanKey ← row.get? 2 >>= fun v => match v with | .text s => some s | _ => none
+    let createdAt ← row.get? 3 >>= fun v => match v with | .integer n => some n | _ => none
+    some { id, slug, humanKey, createdAt := Chronos.Timestamp.fromSeconds createdAt }
+
+/-- Query all products a project belongs to -/
+def queryProductsByProject (db : Database) (projectId : Nat) : IO (Array AgentMail.Product) := do
+  let rows ← db.query s!"SELECT p.id, p.product_id, p.created_at FROM products p JOIN product_projects pp ON p.id = pp.product_db_id WHERE pp.project_id = {projectId} ORDER BY pp.linked_at"
+  pure (rows.filterMap rowToProduct)
+where
+  rowToProduct (row : Quarry.Row) : Option AgentMail.Product := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let productId ← row.get? 1 >>= fun v => match v with | .text s => some s | _ => none
+    let createdAt ← row.get? 2 >>= fun v => match v with | .integer n => some n | _ => none
+    some { id, productId, createdAt := Chronos.Timestamp.fromSeconds createdAt }
+
+/-- Extended inbox entry with project information for cross-project queries -/
+structure InboxEntryWithProject where
+  id : Nat
+  senderName : String
+  subject : String
+  importance : AgentMail.Importance
+  ackRequired : Bool
+  threadId : Option String
+  createdTs : Chronos.Timestamp
+  readAt : Option Chronos.Timestamp
+  ackedAt : Option Chronos.Timestamp
+  bodyMd : Option String
+  recipientType : AgentMail.RecipientType
+  projectId : Nat
+  projectSlug : String
+  projectKey : String
+  deriving Repr
+
+instance : Inhabited InboxEntryWithProject where
+  default := {
+    id := 0
+    senderName := ""
+    subject := ""
+    importance := .normal
+    ackRequired := false
+    threadId := none
+    createdTs := Chronos.Timestamp.fromSeconds 0
+    readAt := none
+    ackedAt := none
+    bodyMd := none
+    recipientType := .toRecipient
+    projectId := 0
+    projectSlug := ""
+    projectKey := ""
+  }
+
+/-- Extended search result with project information -/
+structure SearchResultWithProject where
+  id : Nat
+  subject : String
+  importance : AgentMail.Importance
+  ackRequired : Bool
+  createdTs : Chronos.Timestamp
+  threadId : Option String
+  senderName : String
+  projectId : Nat
+  projectSlug : String
+  projectKey : String
+  deriving Repr, Inhabited
 
 end Database
 

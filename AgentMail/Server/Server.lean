@@ -13,6 +13,7 @@ import AgentMail.Tools.GitGuard
 import AgentMail.Tools.Search
 import AgentMail.Tools.Macros
 import AgentMail.Tools.BuildSlots
+import AgentMail.Tools.Products
 
 open Citadel
 
@@ -73,6 +74,11 @@ def handleRpc (db : Storage.Database) (cfg : Config) (req : ServerRequest) : IO 
         | "acquire_build_slot" => Tools.BuildSlots.handleAcquireBuildSlot db cfg rpcReq
         | "renew_build_slot" => Tools.BuildSlots.handleRenewBuildSlot db cfg rpcReq
         | "release_build_slot" => Tools.BuildSlots.handleReleaseBuildSlot db cfg rpcReq
+        | "ensure_product" => Tools.Products.handleEnsureProduct db cfg rpcReq
+        | "products_link" => Tools.Products.handleProductsLink db cfg rpcReq
+        | "search_messages_product" => Tools.Products.handleSearchMessagesProduct db cfg rpcReq
+        | "fetch_inbox_product" => Tools.Products.handleFetchInboxProduct db cfg rpcReq
+        | "summarize_thread_product" => Tools.Products.handleSummarizeThreadProduct db cfg rpcReq
         | _ =>
           let err := JsonRpc.Error.methodNotFound rpcReq.method
           let resp := JsonRpc.Response.failure rpcReq.id err

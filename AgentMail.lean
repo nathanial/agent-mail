@@ -10,6 +10,7 @@ import AgentMail.Models.FileReservation
 import AgentMail.Models.BuildSlot
 import AgentMail.Models.ContactRequest
 import AgentMail.Models.Contact
+import AgentMail.Models.Product
 import AgentMail.Protocol.JsonRpc
 import AgentMail.Storage.Database
 import AgentMail.Utils.NameGenerator
@@ -22,4 +23,5 @@ import AgentMail.Tools.GitGuard
 import AgentMail.Tools.Search
 import AgentMail.Tools.Macros
 import AgentMail.Tools.BuildSlots
+import AgentMail.Tools.Products
 import AgentMail.Server.Server

@@ -26,6 +26,7 @@ import Tests.GitGuardTools
 import Tests.Search
 import Tests.Macros
 import Tests.BuildSlots
+import Tests.Products
 
 open Crucible
 

@@ -77,6 +77,7 @@ def ensureProjectArchive (cfg : Config) (slug : String) : IO ProjectArchive := d
   let _ ← IO.FS.createDirAll s!"{projectRoot}/build_slots"
   let _ ← IO.FS.createDirAll s!"{projectRoot}/attachments"
   let _ ← IO.FS.createDirAll s!"{projectRoot}/threads"
+  let _ ← IO.FS.createDirAll s!"{repoRoot}/products"
   pure {
     repoRoot := repoRoot
     projectRoot := projectRoot
