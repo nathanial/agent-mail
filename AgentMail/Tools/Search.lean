@@ -480,7 +480,7 @@ def handleSummarizeThread (db : Storage.Database) (_cfg : Config) (req : JsonRpc
     let resp := JsonRpc.Response.failure req.id err
     return Response.json (Lean.Json.compress (Lean.toJson resp))
 
-  let result := if threadIds.length == 1 && threadResults.size == 1 then
+  let result := if threadIds.size == 1 && threadResults.size == 1 then
     -- Single thread response
     threadResults[0]!
   else
