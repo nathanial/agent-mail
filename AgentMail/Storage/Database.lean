@@ -8,6 +8,8 @@ import AgentMail.Models.Project
 import AgentMail.Models.Agent
 import AgentMail.Models.Message
 import AgentMail.Models.Types
+import AgentMail.Models.ContactRequest
+import AgentMail.Models.Contact
 
 namespace AgentMail.Storage
 
@@ -73,6 +75,29 @@ def schema : Array String := #[
     released_ts INTEGER
   )",
 
+  -- Contact requests table
+  "CREATE TABLE IF NOT EXISTS contact_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    from_agent_id INTEGER NOT NULL REFERENCES agents(id),
+    to_agent_id INTEGER NOT NULL REFERENCES agents(id),
+    message TEXT DEFAULT '',
+    status TEXT DEFAULT 'pending',
+    created_ts INTEGER NOT NULL,
+    responded_at INTEGER,
+    UNIQUE(project_id, from_agent_id, to_agent_id)
+  )",
+
+  -- Contacts table (bidirectional relationships)
+  "CREATE TABLE IF NOT EXISTS contacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    agent_id_1 INTEGER NOT NULL REFERENCES agents(id),
+    agent_id_2 INTEGER NOT NULL REFERENCES agents(id),
+    created_ts INTEGER NOT NULL,
+    UNIQUE(project_id, agent_id_1, agent_id_2)
+  )",
+
   -- Indexes for performance
   "CREATE INDEX IF NOT EXISTS idx_agents_project ON agents(project_id)",
   "CREATE INDEX IF NOT EXISTS idx_messages_project ON messages(project_id)",
@@ -81,7 +106,11 @@ def schema : Array String := #[
   "CREATE INDEX IF NOT EXISTS idx_recipients_agent ON message_recipients(agent_id)",
   "CREATE INDEX IF NOT EXISTS idx_reservations_project ON file_reservations(project_id)",
   "CREATE INDEX IF NOT EXISTS idx_reservations_agent ON file_reservations(agent_id)",
-  "CREATE INDEX IF NOT EXISTS idx_reservations_active ON file_reservations(expires_ts, released_ts)"
+  "CREATE INDEX IF NOT EXISTS idx_reservations_active ON file_reservations(expires_ts, released_ts)",
+  "CREATE INDEX IF NOT EXISTS idx_contact_requests_to ON contact_requests(to_agent_id)",
+  "CREATE INDEX IF NOT EXISTS idx_contact_requests_from ON contact_requests(from_agent_id)",
+  "CREATE INDEX IF NOT EXISTS idx_contacts_agent1 ON contacts(agent_id_1)",
+  "CREATE INDEX IF NOT EXISTS idx_contacts_agent2 ON contacts(agent_id_2)"
 ]
 
 /-- Database connection wrapper -/
@@ -445,6 +474,143 @@ def countInbox (db : Database) (projectId agentId : Nat) : IO Nat := do
     | some (.integer n) => pure n.toNat
     | _ => pure 0
   | none => pure 0
+
+-- =============================================================================
+-- Contact request queries
+-- =============================================================================
+
+/-- Insert a new contact request and return its ID -/
+def insertContactRequest (db : Database) (projectId fromAgentId toAgentId : Nat) (message : String) (createdTs : Chronos.Timestamp) : IO Nat := do
+  let messageEsc := message.replace "'" "''"
+  let id ← db.insert s!"INSERT INTO contact_requests (project_id, from_agent_id, to_agent_id, message, status, created_ts) VALUES ({projectId}, {fromAgentId}, {toAgentId}, '{messageEsc}', 'pending', {createdTs.seconds})"
+  pure id.toNat
+
+/-- Query a contact request by ID -/
+def queryContactRequestById (db : Database) (id : Nat) : IO (Option AgentMail.ContactRequest) := do
+  let row ← db.queryOne s!"SELECT id, project_id, from_agent_id, to_agent_id, message, status, created_ts, responded_at FROM contact_requests WHERE id = {id}"
+  pure (row.bind rowToContactRequest)
+where
+  rowToContactRequest (row : Quarry.Row) : Option AgentMail.ContactRequest := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let projectId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let fromAgentId ← row.get? 2 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let toAgentId ← row.get? 3 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let message ← row.get? 4 >>= fun v => match v with | .text s => some s | _ => none
+    let statusStr ← row.get? 5 >>= fun v => match v with | .text s => some s | _ => none
+    let createdTs ← row.get? 6 >>= fun v => match v with | .integer n => some n | _ => none
+    let respondedAt : Option Int := row.get? 7 >>= fun v => match v with | .integer n => some n | _ => none
+    let status := AgentMail.ContactRequestStatus.fromString? statusStr |>.getD .pending
+    some {
+      id, projectId, fromAgentId, toAgentId, message, status
+      createdTs := Chronos.Timestamp.fromSeconds createdTs
+      respondedAt := respondedAt.map Chronos.Timestamp.fromSeconds
+    }
+
+/-- Query existing contact request between two agents -/
+def queryContactRequestBetween (db : Database) (projectId fromAgentId toAgentId : Nat) : IO (Option AgentMail.ContactRequest) := do
+  let row ← db.queryOne s!"SELECT id, project_id, from_agent_id, to_agent_id, message, status, created_ts, responded_at FROM contact_requests WHERE project_id = {projectId} AND from_agent_id = {fromAgentId} AND to_agent_id = {toAgentId}"
+  pure (row.bind rowToContactRequest)
+where
+  rowToContactRequest (row : Quarry.Row) : Option AgentMail.ContactRequest := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let projectId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let fromAgentId ← row.get? 2 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let toAgentId ← row.get? 3 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let message ← row.get? 4 >>= fun v => match v with | .text s => some s | _ => none
+    let statusStr ← row.get? 5 >>= fun v => match v with | .text s => some s | _ => none
+    let createdTs ← row.get? 6 >>= fun v => match v with | .integer n => some n | _ => none
+    let respondedAt : Option Int := row.get? 7 >>= fun v => match v with | .integer n => some n | _ => none
+    let status := AgentMail.ContactRequestStatus.fromString? statusStr |>.getD .pending
+    some {
+      id, projectId, fromAgentId, toAgentId, message, status
+      createdTs := Chronos.Timestamp.fromSeconds createdTs
+      respondedAt := respondedAt.map Chronos.Timestamp.fromSeconds
+    }
+
+/-- Query pending contact requests for an agent (where they are the recipient) -/
+def queryPendingContactRequests (db : Database) (projectId agentId : Nat) : IO (Array AgentMail.ContactRequest) := do
+  let rows ← db.query s!"SELECT id, project_id, from_agent_id, to_agent_id, message, status, created_ts, responded_at FROM contact_requests WHERE project_id = {projectId} AND to_agent_id = {agentId} AND status = 'pending' ORDER BY created_ts DESC"
+  pure (rows.filterMap rowToContactRequest)
+where
+  rowToContactRequest (row : Quarry.Row) : Option AgentMail.ContactRequest := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let projectId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let fromAgentId ← row.get? 2 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let toAgentId ← row.get? 3 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let message ← row.get? 4 >>= fun v => match v with | .text s => some s | _ => none
+    let statusStr ← row.get? 5 >>= fun v => match v with | .text s => some s | _ => none
+    let createdTs ← row.get? 6 >>= fun v => match v with | .integer n => some n | _ => none
+    let respondedAt : Option Int := row.get? 7 >>= fun v => match v with | .integer n => some n | _ => none
+    let status := AgentMail.ContactRequestStatus.fromString? statusStr |>.getD .pending
+    some {
+      id, projectId, fromAgentId, toAgentId, message, status
+      createdTs := Chronos.Timestamp.fromSeconds createdTs
+      respondedAt := respondedAt.map Chronos.Timestamp.fromSeconds
+    }
+
+/-- Update contact request status -/
+def updateContactRequestStatus (db : Database) (id : Nat) (status : AgentMail.ContactRequestStatus) (respondedAt : Chronos.Timestamp) : IO Unit := do
+  let statusStr := status.toString
+  let _ ← db.modify s!"UPDATE contact_requests SET status = '{statusStr}', responded_at = {respondedAt.seconds} WHERE id = {id}"
+  pure ()
+
+/-- Reset an existing contact request back to pending with a new message/timestamp. -/
+def resetContactRequestToPending (db : Database) (id : Nat) (message : String) (createdTs : Chronos.Timestamp) : IO Unit := do
+  let messageEsc := message.replace "'" "''"
+  let _ ← db.modify s!"UPDATE contact_requests SET status = 'pending', message = '{messageEsc}', created_ts = {createdTs.seconds}, responded_at = NULL WHERE id = {id}"
+  pure ()
+
+-- =============================================================================
+-- Contact queries
+-- =============================================================================
+
+/-- Insert a new contact and return its ID (ensures agentId1 < agentId2) -/
+def insertContact (db : Database) (projectId agent1 agent2 : Nat) (createdTs : Chronos.Timestamp) : IO Nat := do
+  let (a1, a2) := if agent1 < agent2 then (agent1, agent2) else (agent2, agent1)
+  let id ← db.insert s!"INSERT INTO contacts (project_id, agent_id_1, agent_id_2, created_ts) VALUES ({projectId}, {a1}, {a2}, {createdTs.seconds})"
+  pure id.toNat
+
+/-- Query contact between two agents -/
+def queryContactBetween (db : Database) (projectId agent1 agent2 : Nat) : IO (Option AgentMail.Contact) := do
+  let (a1, a2) := if agent1 < agent2 then (agent1, agent2) else (agent2, agent1)
+  let row ← db.queryOne s!"SELECT id, project_id, agent_id_1, agent_id_2, created_ts FROM contacts WHERE project_id = {projectId} AND agent_id_1 = {a1} AND agent_id_2 = {a2}"
+  pure (row.bind rowToContact)
+where
+  rowToContact (row : Quarry.Row) : Option AgentMail.Contact := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let projectId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let agentId1 ← row.get? 2 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let agentId2 ← row.get? 3 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let createdTs ← row.get? 4 >>= fun v => match v with | .integer n => some n | _ => none
+    some { id, projectId, agentId1, agentId2, createdTs := Chronos.Timestamp.fromSeconds createdTs }
+
+/-- Contact entry with agent name for query results -/
+structure ContactEntry where
+  contactId : Nat
+  agentId : Nat
+  agentName : String
+  sinceTs : Chronos.Timestamp
+  deriving Repr
+
+/-- Query all contacts for an agent -/
+def queryContacts (db : Database) (projectId agentId : Nat) : IO (Array ContactEntry) := do
+  -- Query contacts where agent is either agent_id_1 or agent_id_2
+  let sql := s!"SELECT c.id, CASE WHEN c.agent_id_1 = {agentId} THEN c.agent_id_2 ELSE c.agent_id_1 END as other_agent_id, a.name, c.created_ts FROM contacts c JOIN agents a ON a.id = CASE WHEN c.agent_id_1 = {agentId} THEN c.agent_id_2 ELSE c.agent_id_1 END WHERE c.project_id = {projectId} AND (c.agent_id_1 = {agentId} OR c.agent_id_2 = {agentId}) ORDER BY c.created_ts DESC"
+  let rows ← db.query sql
+  pure (rows.filterMap rowToContactEntry)
+where
+  rowToContactEntry (row : Quarry.Row) : Option ContactEntry := do
+    let contactId ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let agentId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let agentName ← row.get? 2 >>= fun v => match v with | .text s => some s | _ => none
+    let sinceTs ← row.get? 3 >>= fun v => match v with | .integer n => some n | _ => none
+    some { contactId, agentId, agentName, sinceTs := Chronos.Timestamp.fromSeconds sinceTs }
+
+/-- Update an agent's contact policy -/
+def updateAgentContactPolicy (db : Database) (agentId : Nat) (policy : AgentMail.ContactPolicy) : IO Unit := do
+  let policyStr := policy.toString
+  let _ ← db.modify s!"UPDATE agents SET contact_policy = '{policyStr}' WHERE id = {agentId}"
+  pure ()
 
 end Database
 
