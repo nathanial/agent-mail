@@ -1,1 +1,4 @@
 .lake
+*.db
+*.db-shm
+*.db-wal
