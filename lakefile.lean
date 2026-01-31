@@ -9,6 +9,7 @@ require crucible from git "https://github.com/nathanial/crucible" @ "v0.0.9"
 require quarry from git "https://github.com/nathanial/quarry" @ "v0.0.3"
 require citadel from git "https://github.com/nathanial/citadel" @ "v0.0.2"
 require chronos from git "https://github.com/nathanial/chronos-lean" @ "v0.0.7"
+require rune from "../../util/rune"
 
 @[default_target]
 lean_lib AgentMail where

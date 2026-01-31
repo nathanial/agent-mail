@@ -8,6 +8,7 @@ import AgentMail.Storage.Database
 import AgentMail.Tools.Identity
 import AgentMail.Tools.Messaging
 import AgentMail.Tools.Contacts
+import AgentMail.Tools.FileReservations
 
 open Citadel
 
@@ -53,6 +54,10 @@ def handleRpc (db : Storage.Database) (cfg : Config) (req : ServerRequest) : IO 
         | "respond_contact" => Tools.Contacts.handleRespondContact db rpcReq
         | "list_contacts" => Tools.Contacts.handleListContacts db rpcReq
         | "set_contact_policy" => Tools.Contacts.handleSetContactPolicy db rpcReq
+        | "file_reservation_paths" => Tools.FileReservations.handleFileReservationPaths db rpcReq
+        | "release_file_reservations" => Tools.FileReservations.handleReleaseFileReservations db rpcReq
+        | "renew_file_reservations" => Tools.FileReservations.handleRenewFileReservations db rpcReq
+        | "force_release_file_reservation" => Tools.FileReservations.handleForceReleaseFileReservation db rpcReq
         | _ =>
           let err := JsonRpc.Error.methodNotFound rpcReq.method
           let resp := JsonRpc.Response.failure rpcReq.id err

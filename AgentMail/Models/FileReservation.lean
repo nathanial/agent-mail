@@ -18,6 +18,19 @@ structure FileReservation where
   releasedTs : Option Chronos.Timestamp
   deriving Repr
 
+instance : Inhabited FileReservation where
+  default := {
+    id := 0
+    projectId := 0
+    agentId := 0
+    pathPattern := ""
+    exclusive := true
+    reason := ""
+    createdTs := Chronos.Timestamp.fromSeconds 0
+    expiresTs := Chronos.Timestamp.fromSeconds 0
+    releasedTs := none
+  }
+
 namespace FileReservation
 
 instance : Lean.ToJson FileReservation where

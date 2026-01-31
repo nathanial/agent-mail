@@ -10,6 +10,7 @@ import AgentMail.Models.Message
 import AgentMail.Models.Types
 import AgentMail.Models.ContactRequest
 import AgentMail.Models.Contact
+import AgentMail.Models.FileReservation
 
 namespace AgentMail.Storage
 
@@ -611,6 +612,150 @@ def updateAgentContactPolicy (db : Database) (agentId : Nat) (policy : AgentMail
   let policyStr := policy.toString
   let _ ← db.modify s!"UPDATE agents SET contact_policy = '{policyStr}' WHERE id = {agentId}"
   pure ()
+
+-- =============================================================================
+-- File reservation queries
+-- =============================================================================
+
+/-- Insert a new file reservation and return its ID -/
+def insertFileReservation (db : Database) (projectId agentId : Nat) (pathPattern : String)
+    (exclusive : Bool) (reason : String) (createdTs expiresTs : Chronos.Timestamp) : IO Nat := do
+  let pathEsc := pathPattern.replace "'" "''"
+  let reasonEsc := reason.replace "'" "''"
+  let exclusiveInt := if exclusive then 1 else 0
+  let id ← db.insert s!"INSERT INTO file_reservations (project_id, agent_id, path_pattern, exclusive, reason, created_ts, expires_ts) VALUES ({projectId}, {agentId}, '{pathEsc}', {exclusiveInt}, '{reasonEsc}', {createdTs.seconds}, {expiresTs.seconds})"
+  pure id.toNat
+
+/-- Query a file reservation by ID -/
+def queryFileReservationById (db : Database) (id : Nat) : IO (Option AgentMail.FileReservation) := do
+  let row ← db.queryOne s!"SELECT id, project_id, agent_id, path_pattern, exclusive, reason, created_ts, expires_ts, released_ts FROM file_reservations WHERE id = {id}"
+  pure (row.bind rowToFileReservation)
+where
+  rowToFileReservation (row : Quarry.Row) : Option AgentMail.FileReservation := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let projectId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let agentId ← row.get? 2 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let pathPattern ← row.get? 3 >>= fun v => match v with | .text s => some s | _ => none
+    let exclusiveInt ← row.get? 4 >>= fun v => match v with | .integer n => some n | _ => none
+    let reason ← row.get? 5 >>= fun v => match v with | .text s => some s | _ => none
+    let createdTs ← row.get? 6 >>= fun v => match v with | .integer n => some n | _ => none
+    let expiresTs ← row.get? 7 >>= fun v => match v with | .integer n => some n | _ => none
+    let releasedTs : Option Int := row.get? 8 >>= fun v => match v with | .integer n => some n | _ => none
+    some {
+      id, projectId, agentId, pathPattern
+      exclusive := exclusiveInt != 0
+      reason
+      createdTs := Chronos.Timestamp.fromSeconds createdTs
+      expiresTs := Chronos.Timestamp.fromSeconds expiresTs
+      releasedTs := releasedTs.map Chronos.Timestamp.fromSeconds
+    }
+
+/-- Query active (non-expired, non-released) reservations for a project -/
+def queryActiveFileReservations (db : Database) (projectId : Nat) (now : Chronos.Timestamp) : IO (Array AgentMail.FileReservation) := do
+  let rows ← db.query s!"SELECT id, project_id, agent_id, path_pattern, exclusive, reason, created_ts, expires_ts, released_ts FROM file_reservations WHERE project_id = {projectId} AND expires_ts > {now.seconds} AND released_ts IS NULL"
+  pure (rows.filterMap rowToFileReservation)
+where
+  rowToFileReservation (row : Quarry.Row) : Option AgentMail.FileReservation := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let projectId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let agentId ← row.get? 2 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let pathPattern ← row.get? 3 >>= fun v => match v with | .text s => some s | _ => none
+    let exclusiveInt ← row.get? 4 >>= fun v => match v with | .integer n => some n | _ => none
+    let reason ← row.get? 5 >>= fun v => match v with | .text s => some s | _ => none
+    let createdTs ← row.get? 6 >>= fun v => match v with | .integer n => some n | _ => none
+    let expiresTs ← row.get? 7 >>= fun v => match v with | .integer n => some n | _ => none
+    let releasedTs : Option Int := row.get? 8 >>= fun v => match v with | .integer n => some n | _ => none
+    some {
+      id, projectId, agentId, pathPattern
+      exclusive := exclusiveInt != 0
+      reason
+      createdTs := Chronos.Timestamp.fromSeconds createdTs
+      expiresTs := Chronos.Timestamp.fromSeconds expiresTs
+      releasedTs := releasedTs.map Chronos.Timestamp.fromSeconds
+    }
+
+/-- Query reservations by agent (including expired/released for history) -/
+def queryFileReservationsByAgent (db : Database) (projectId agentId : Nat) : IO (Array AgentMail.FileReservation) := do
+  let rows ← db.query s!"SELECT id, project_id, agent_id, path_pattern, exclusive, reason, created_ts, expires_ts, released_ts FROM file_reservations WHERE project_id = {projectId} AND agent_id = {agentId} ORDER BY created_ts DESC"
+  pure (rows.filterMap rowToFileReservation)
+where
+  rowToFileReservation (row : Quarry.Row) : Option AgentMail.FileReservation := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let projectId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let agentId ← row.get? 2 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let pathPattern ← row.get? 3 >>= fun v => match v with | .text s => some s | _ => none
+    let exclusiveInt ← row.get? 4 >>= fun v => match v with | .integer n => some n | _ => none
+    let reason ← row.get? 5 >>= fun v => match v with | .text s => some s | _ => none
+    let createdTs ← row.get? 6 >>= fun v => match v with | .integer n => some n | _ => none
+    let expiresTs ← row.get? 7 >>= fun v => match v with | .integer n => some n | _ => none
+    let releasedTs : Option Int := row.get? 8 >>= fun v => match v with | .integer n => some n | _ => none
+    some {
+      id, projectId, agentId, pathPattern
+      exclusive := exclusiveInt != 0
+      reason
+      createdTs := Chronos.Timestamp.fromSeconds createdTs
+      expiresTs := Chronos.Timestamp.fromSeconds expiresTs
+      releasedTs := releasedTs.map Chronos.Timestamp.fromSeconds
+    }
+
+/-- Query active reservations for a specific agent -/
+def queryActiveFileReservationsByAgent (db : Database) (projectId agentId : Nat) (now : Chronos.Timestamp) : IO (Array AgentMail.FileReservation) := do
+  let rows ← db.query s!"SELECT id, project_id, agent_id, path_pattern, exclusive, reason, created_ts, expires_ts, released_ts FROM file_reservations WHERE project_id = {projectId} AND agent_id = {agentId} AND expires_ts > {now.seconds} AND released_ts IS NULL ORDER BY created_ts DESC"
+  pure (rows.filterMap rowToFileReservation)
+where
+  rowToFileReservation (row : Quarry.Row) : Option AgentMail.FileReservation := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let projectId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let agentId ← row.get? 2 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let pathPattern ← row.get? 3 >>= fun v => match v with | .text s => some s | _ => none
+    let exclusiveInt ← row.get? 4 >>= fun v => match v with | .integer n => some n | _ => none
+    let reason ← row.get? 5 >>= fun v => match v with | .text s => some s | _ => none
+    let createdTs ← row.get? 6 >>= fun v => match v with | .integer n => some n | _ => none
+    let expiresTs ← row.get? 7 >>= fun v => match v with | .integer n => some n | _ => none
+    let releasedTs : Option Int := row.get? 8 >>= fun v => match v with | .integer n => some n | _ => none
+    some {
+      id, projectId, agentId, pathPattern
+      exclusive := exclusiveInt != 0
+      reason
+      createdTs := Chronos.Timestamp.fromSeconds createdTs
+      expiresTs := Chronos.Timestamp.fromSeconds expiresTs
+      releasedTs := releasedTs.map Chronos.Timestamp.fromSeconds
+    }
+
+/-- Mark reservation as released -/
+def updateFileReservationReleased (db : Database) (id : Nat) (releasedTs : Chronos.Timestamp) : IO Bool := do
+  let affected ← db.modify s!"UPDATE file_reservations SET released_ts = {releasedTs.seconds} WHERE id = {id} AND released_ts IS NULL"
+  pure (affected > 0)
+
+/-- Extend reservation TTL -/
+def updateFileReservationExpires (db : Database) (id : Nat) (expiresTs : Chronos.Timestamp) : IO Bool := do
+  let affected ← db.modify s!"UPDATE file_reservations SET expires_ts = {expiresTs.seconds} WHERE id = {id} AND released_ts IS NULL"
+  pure (affected > 0)
+
+/-- Query active reservations matching a path pattern -/
+def queryActiveFileReservationsByPath (db : Database) (projectId : Nat) (pathPattern : String) (now : Chronos.Timestamp) : IO (Array AgentMail.FileReservation) := do
+  let pathEsc := pathPattern.replace "'" "''"
+  let rows ← db.query s!"SELECT id, project_id, agent_id, path_pattern, exclusive, reason, created_ts, expires_ts, released_ts FROM file_reservations WHERE project_id = {projectId} AND path_pattern = '{pathEsc}' AND expires_ts > {now.seconds} AND released_ts IS NULL"
+  pure (rows.filterMap rowToFileReservation)
+where
+  rowToFileReservation (row : Quarry.Row) : Option AgentMail.FileReservation := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let projectId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let agentId ← row.get? 2 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let pathPattern ← row.get? 3 >>= fun v => match v with | .text s => some s | _ => none
+    let exclusiveInt ← row.get? 4 >>= fun v => match v with | .integer n => some n | _ => none
+    let reason ← row.get? 5 >>= fun v => match v with | .text s => some s | _ => none
+    let createdTs ← row.get? 6 >>= fun v => match v with | .integer n => some n | _ => none
+    let expiresTs ← row.get? 7 >>= fun v => match v with | .integer n => some n | _ => none
+    let releasedTs : Option Int := row.get? 8 >>= fun v => match v with | .integer n => some n | _ => none
+    some {
+      id, projectId, agentId, pathPattern
+      exclusive := exclusiveInt != 0
+      reason
+      createdTs := Chronos.Timestamp.fromSeconds createdTs
+      expiresTs := Chronos.Timestamp.fromSeconds expiresTs
+      releasedTs := releasedTs.map Chronos.Timestamp.fromSeconds
+    }
 
 end Database
 
