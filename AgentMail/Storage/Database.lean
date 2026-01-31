@@ -2,6 +2,10 @@
   AgentMail.Storage.Database - SQLite database connection and schema
 -/
 import Quarry
+import Chronos
+import AgentMail.Models.Project
+import AgentMail.Models.Agent
+import AgentMail.Models.Types
 
 namespace AgentMail.Storage
 
@@ -133,6 +137,135 @@ def queryOne (db : Database) (sql : String) : IO (Option Quarry.Row) :=
 /-- Run a function inside a transaction -/
 def transaction (db : Database) (action : IO α) : IO α :=
   db.conn.transaction action
+
+-- =============================================================================
+-- Project queries
+-- =============================================================================
+
+/-- Query a project by its human_key (path) -/
+def queryProjectByHumanKey (db : Database) (humanKey : String) : IO (Option AgentMail.Project) := do
+  let escaped := humanKey.replace "'" "''"
+  let row ← db.queryOne s!"SELECT id, slug, human_key, created_at FROM projects WHERE human_key = '{escaped}'"
+  pure (row.bind rowToProject)
+where
+  rowToProject (row : Quarry.Row) : Option AgentMail.Project := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let slug ← row.get? 1 >>= fun v => match v with | .text s => some s | _ => none
+    let humanKey ← row.get? 2 >>= fun v => match v with | .text s => some s | _ => none
+    let createdAt ← row.get? 3 >>= fun v => match v with | .integer n => some n | _ => none
+    some { id, slug, humanKey, createdAt := Chronos.Timestamp.fromSeconds createdAt }
+
+/-- Query a project by its ID -/
+def queryProjectById (db : Database) (id : Nat) : IO (Option AgentMail.Project) := do
+  let row ← db.queryOne s!"SELECT id, slug, human_key, created_at FROM projects WHERE id = {id}"
+  pure (row.bind rowToProject)
+where
+  rowToProject (row : Quarry.Row) : Option AgentMail.Project := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let slug ← row.get? 1 >>= fun v => match v with | .text s => some s | _ => none
+    let humanKey ← row.get? 2 >>= fun v => match v with | .text s => some s | _ => none
+    let createdAt ← row.get? 3 >>= fun v => match v with | .integer n => some n | _ => none
+    some { id, slug, humanKey, createdAt := Chronos.Timestamp.fromSeconds createdAt }
+
+/-- Query a project by its slug -/
+def queryProjectBySlug (db : Database) (slug : String) : IO (Option AgentMail.Project) := do
+  let slugEsc := slug.replace "'" "''"
+  let row ← db.queryOne s!"SELECT id, slug, human_key, created_at FROM projects WHERE slug = '{slugEsc}'"
+  pure (row.bind rowToProject)
+where
+  rowToProject (row : Quarry.Row) : Option AgentMail.Project := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let slug ← row.get? 1 >>= fun v => match v with | .text s => some s | _ => none
+    let humanKey ← row.get? 2 >>= fun v => match v with | .text s => some s | _ => none
+    let createdAt ← row.get? 3 >>= fun v => match v with | .integer n => some n | _ => none
+    some { id, slug, humanKey, createdAt := Chronos.Timestamp.fromSeconds createdAt }
+
+/-- Insert a new project and return its ID -/
+def insertProject (db : Database) (slug : String) (humanKey : String) (createdAt : Chronos.Timestamp) : IO Nat := do
+  let slugEsc := slug.replace "'" "''"
+  let keyEsc := humanKey.replace "'" "''"
+  let id ← db.insert s!"INSERT INTO projects (slug, human_key, created_at) VALUES ('{slugEsc}', '{keyEsc}', {createdAt.seconds})"
+  pure id.toNat
+
+-- =============================================================================
+-- Agent queries
+-- =============================================================================
+
+/-- Query an agent by name within a project -/
+def queryAgentByName (db : Database) (projectId : Nat) (name : String) : IO (Option AgentMail.Agent) := do
+  let nameEsc := name.replace "'" "''"
+  let row ← db.queryOne s!"SELECT id, project_id, name, program, model, task_description, contact_policy, attachments_policy, inception_ts, last_active_ts FROM agents WHERE project_id = {projectId} AND name = '{nameEsc}'"
+  pure (row.bind rowToAgent)
+where
+  rowToAgent (row : Quarry.Row) : Option AgentMail.Agent := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let projectId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let name ← row.get? 2 >>= fun v => match v with | .text s => some s | _ => none
+    let program ← row.get? 3 >>= fun v => match v with | .text s => some s | _ => none
+    let model ← row.get? 4 >>= fun v => match v with | .text s => some s | _ => none
+    let taskDescription ← row.get? 5 >>= fun v => match v with | .text s => some s | _ => none
+    let contactPolicyStr ← row.get? 6 >>= fun v => match v with | .text s => some s | _ => none
+    let attachmentsPolicyStr ← row.get? 7 >>= fun v => match v with | .text s => some s | _ => none
+    let inceptionTs ← row.get? 8 >>= fun v => match v with | .integer n => some n | _ => none
+    let lastActiveTs ← row.get? 9 >>= fun v => match v with | .integer n => some n | _ => none
+    let contactPolicy := AgentMail.ContactPolicy.fromString? contactPolicyStr |>.getD .auto
+    let attachmentsPolicy := AgentMail.AttachmentsPolicy.fromString? attachmentsPolicyStr |>.getD .auto
+    some {
+      id, projectId, name, program, model, taskDescription,
+      contactPolicy, attachmentsPolicy,
+      inceptionTs := Chronos.Timestamp.fromSeconds inceptionTs,
+      lastActiveTs := Chronos.Timestamp.fromSeconds lastActiveTs
+    }
+
+/-- Query an agent by its ID -/
+def queryAgentById (db : Database) (id : Nat) : IO (Option AgentMail.Agent) := do
+  let row ← db.queryOne s!"SELECT id, project_id, name, program, model, task_description, contact_policy, attachments_policy, inception_ts, last_active_ts FROM agents WHERE id = {id}"
+  pure (row.bind rowToAgent)
+where
+  rowToAgent (row : Quarry.Row) : Option AgentMail.Agent := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let projectId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let name ← row.get? 2 >>= fun v => match v with | .text s => some s | _ => none
+    let program ← row.get? 3 >>= fun v => match v with | .text s => some s | _ => none
+    let model ← row.get? 4 >>= fun v => match v with | .text s => some s | _ => none
+    let taskDescription ← row.get? 5 >>= fun v => match v with | .text s => some s | _ => none
+    let contactPolicyStr ← row.get? 6 >>= fun v => match v with | .text s => some s | _ => none
+    let attachmentsPolicyStr ← row.get? 7 >>= fun v => match v with | .text s => some s | _ => none
+    let inceptionTs ← row.get? 8 >>= fun v => match v with | .integer n => some n | _ => none
+    let lastActiveTs ← row.get? 9 >>= fun v => match v with | .integer n => some n | _ => none
+    let contactPolicy := AgentMail.ContactPolicy.fromString? contactPolicyStr |>.getD .auto
+    let attachmentsPolicy := AgentMail.AttachmentsPolicy.fromString? attachmentsPolicyStr |>.getD .auto
+    some {
+      id, projectId, name, program, model, taskDescription,
+      contactPolicy, attachmentsPolicy,
+      inceptionTs := Chronos.Timestamp.fromSeconds inceptionTs,
+      lastActiveTs := Chronos.Timestamp.fromSeconds lastActiveTs
+    }
+
+/-- Insert a new agent and return its ID -/
+def insertAgent (db : Database) (agent : AgentMail.Agent) : IO Nat := do
+  let nameEsc := agent.name.replace "'" "''"
+  let programEsc := agent.program.replace "'" "''"
+  let modelEsc := agent.model.replace "'" "''"
+  let taskEsc := agent.taskDescription.replace "'" "''"
+  let contactStr := agent.contactPolicy.toString
+  let attachStr := agent.attachmentsPolicy.toString
+  let id ← db.insert s!"INSERT INTO agents (project_id, name, program, model, task_description, contact_policy, attachments_policy, inception_ts, last_active_ts) VALUES ({agent.projectId}, '{nameEsc}', '{programEsc}', '{modelEsc}', '{taskEsc}', '{contactStr}', '{attachStr}', {agent.inceptionTs.seconds}, {agent.lastActiveTs.seconds})"
+  pure id.toNat
+
+/-- Update an agent's last_active_ts -/
+def updateAgentLastActive (db : Database) (agentId : Nat) (ts : Chronos.Timestamp) : IO Unit := do
+  let _ ← db.modify s!"UPDATE agents SET last_active_ts = {ts.seconds} WHERE id = {agentId}"
+  pure ()
+
+/-- Update agent profile fields and last_active_ts -/
+def updateAgentProfile (db : Database) (agent : AgentMail.Agent) : IO Unit := do
+  let programEsc := agent.program.replace "'" "''"
+  let modelEsc := agent.model.replace "'" "''"
+  let taskEsc := agent.taskDescription.replace "'" "''"
+  let attachStr := agent.attachmentsPolicy.toString
+  let _ ← db.modify s!"UPDATE agents SET program = '{programEsc}', model = '{modelEsc}', task_description = '{taskEsc}', attachments_policy = '{attachStr}', last_active_ts = {agent.lastActiveTs.seconds} WHERE id = {agent.id}"
+  pure ()
 
 end Database
 

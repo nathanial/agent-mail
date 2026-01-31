@@ -6,6 +6,7 @@ namespace AgentMail
 
 /-- Server configuration -/
 structure Config where
+  environment : String := "development"
   port : UInt16 := 8765
   host : String := "127.0.0.1"
   databasePath : String := "agent_mail.db"
@@ -19,6 +20,7 @@ def default : Config := {}
 
 /-- Load configuration from environment variables -/
 def fromEnv : IO Config := do
+  let env ← IO.getEnv "AGENT_MAIL_ENV"
   let port ← IO.getEnv "AGENT_MAIL_PORT"
   let host ← IO.getEnv "AGENT_MAIL_HOST"
   let dbPath ← IO.getEnv "AGENT_MAIL_DB"
@@ -31,6 +33,7 @@ def fromEnv : IO Config := do
     | none => 8765
 
   pure {
+    environment := env.getD "development"
     port := portVal
     host := host.getD "127.0.0.1"
     databasePath := dbPath.getD "agent_mail.db"
@@ -42,7 +45,7 @@ def display (cfg : Config) : String :=
   let tokenDisplay := match cfg.authToken with
     | some _ => "(set)"
     | none => "(none)"
-  s!"Config \{ host: {cfg.host}, port: {cfg.port}, database: {cfg.databasePath}, token: {tokenDisplay} }"
+  s!"Config \{ env: {cfg.environment}, host: {cfg.host}, port: {cfg.port}, database: {cfg.databasePath}, token: {tokenDisplay} }"
 
 end Config
 

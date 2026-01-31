@@ -266,6 +266,7 @@ testSuite "Config"
 
 test "Default config" := do
   let cfg := Config.default
+  cfg.environment ≡ "development"
   cfg.port ≡ 8765
   cfg.host ≡ "127.0.0.1"
   cfg.databasePath ≡ "agent_mail.db"
@@ -315,5 +316,128 @@ test "Insert and query project" := do
   db.close
 
 end Tests.Database
+
+namespace Tests.NameGenerator
+
+testSuite "NameGenerator"
+
+open AgentMail.Utils.NameGenerator in
+test "Deterministic name generation" := do
+  let name1 := generateNameDeterministic 12345
+  let name2 := generateNameDeterministic 12345
+  name1 ≡ name2
+  -- Verify it follows AdjectiveNoun pattern
+  shouldSatisfy (name1.length > 0) "name should not be empty"
+
+open AgentMail.Utils.NameGenerator in
+test "Different seeds produce different names" := do
+  let name1 := generateNameDeterministic 1
+  let name2 := generateNameDeterministic 1000000
+  shouldSatisfy (name1 != name2) "different seeds should produce different names"
+
+end Tests.NameGenerator
+
+namespace Tests.Identity
+
+testSuite "Identity"
+
+open AgentMail.Tools.Identity in
+test "generateSlug sanitizes paths" := do
+  let slug1 := generateSlug "/Users/test/my-project"
+  shouldSatisfy (slug1.find? "/" |>.isNone) "slug should not contain slashes"
+  shouldSatisfy (not (slug1.startsWith "-")) "slug should not start with dash"
+  shouldSatisfy (not (slug1.endsWith "-")) "slug should not end with dash"
+
+open AgentMail.Tools.Identity in
+test "generateSlug handles various inputs" := do
+  let slug1 := generateSlug "/foo/bar/baz"
+  slug1 ≡ "foo-bar-baz"
+  let slug2 := generateSlug "simple"
+  slug2 ≡ "simple"
+
+end Tests.Identity
+
+namespace Tests.DatabaseQueries
+
+testSuite "DatabaseQueries"
+
+test "Insert and query project" := do
+  let db ← Storage.Database.openMemory
+  let now := Chronos.Timestamp.fromSeconds 1700000000
+  let id ← db.insertProject "test-slug" "/Users/test/project" now
+  id ≡ (1 : Nat)
+  let project ← db.queryProjectByHumanKey "/Users/test/project"
+  match project with
+  | some p =>
+    p.slug ≡ "test-slug"
+    p.humanKey ≡ "/Users/test/project"
+  | none => throw (IO.userError "Project not found")
+  db.close
+
+test "Query project by ID" := do
+  let db ← Storage.Database.openMemory
+  let now := Chronos.Timestamp.fromSeconds 1700000000
+  let id ← db.insertProject "slug1" "/path/1" now
+  let project ← db.queryProjectById id
+  match project with
+  | some p => p.id ≡ id
+  | none => throw (IO.userError "Project not found by ID")
+  db.close
+
+test "Insert and query agent" := do
+  let db ← Storage.Database.openMemory
+  let now := Chronos.Timestamp.fromSeconds 1700000000
+  -- First create a project
+  let projectId ← db.insertProject "test" "/test" now
+  -- Create an agent
+  let agent : Agent := {
+    id := 0
+    projectId := projectId
+    name := "TestAgent"
+    program := "claude-code"
+    model := "opus-4.5"
+    taskDescription := "Testing"
+    contactPolicy := ContactPolicy.auto
+    attachmentsPolicy := AttachmentsPolicy.auto
+    inceptionTs := now
+    lastActiveTs := now
+  }
+  let agentId ← db.insertAgent agent
+  -- Query by name
+  let found ← db.queryAgentByName projectId "TestAgent"
+  match found with
+  | some a =>
+    a.name ≡ "TestAgent"
+    a.program ≡ "claude-code"
+    a.model ≡ "opus-4.5"
+  | none => throw (IO.userError "Agent not found")
+  db.close
+
+test "Update agent last active" := do
+  let db ← Storage.Database.openMemory
+  let now := Chronos.Timestamp.fromSeconds 1700000000
+  let later := Chronos.Timestamp.fromSeconds 1700001000
+  let projectId ← db.insertProject "test" "/test" now
+  let agent : Agent := {
+    id := 0
+    projectId := projectId
+    name := "UpdateTest"
+    program := "test"
+    model := "test"
+    taskDescription := ""
+    contactPolicy := ContactPolicy.auto
+    attachmentsPolicy := AttachmentsPolicy.auto
+    inceptionTs := now
+    lastActiveTs := now
+  }
+  let agentId ← db.insertAgent agent
+  db.updateAgentLastActive agentId later
+  let found ← db.queryAgentById agentId
+  match found with
+  | some a => a.lastActiveTs.seconds ≡ later.seconds
+  | none => throw (IO.userError "Agent not found after update")
+  db.close
+
+end Tests.DatabaseQueries
 
 def main : IO UInt32 := runAllSuites

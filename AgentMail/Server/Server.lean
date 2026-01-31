@@ -5,6 +5,7 @@ import Citadel
 import AgentMail.Config
 import AgentMail.Protocol.JsonRpc
 import AgentMail.Storage.Database
+import AgentMail.Tools.Identity
 
 open Citadel
 
@@ -14,7 +15,7 @@ namespace AgentMail.Server
 def version : String := "0.1.0"
 
 /-- Handle JSON-RPC requests -/
-def handleRpc (_db : Storage.Database) (req : ServerRequest) : IO Response := do
+def handleRpc (db : Storage.Database) (cfg : Config) (req : ServerRequest) : IO Response := do
   let body := req.bodyString
 
   -- Parse JSON
@@ -35,11 +36,16 @@ def handleRpc (_db : Storage.Database) (req : ServerRequest) : IO Response := do
       if rpcReq.isNotification then
         pure Response.noContent
       else
-        -- For Phase 1, all methods return "method not found"
-        -- Phase 2 will implement actual handlers
-        let err := JsonRpc.Error.methodNotFound rpcReq.method
-        let resp := JsonRpc.Response.failure rpcReq.id err
-        pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
+        -- Route to appropriate handler
+        match rpcReq.method with
+        | "health_check" => Tools.Identity.handleHealthCheck db cfg rpcReq
+        | "ensure_project" => Tools.Identity.handleEnsureProject db rpcReq
+        | "register_agent" => Tools.Identity.handleRegisterAgent db rpcReq
+        | "whois" => Tools.Identity.handleWhois db rpcReq
+        | _ =>
+          let err := JsonRpc.Error.methodNotFound rpcReq.method
+          let resp := JsonRpc.Response.failure rpcReq.id err
+          pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
 
 /-- Handle health check requests -/
 def handleHealth (_req : ServerRequest) : IO Response := do
@@ -52,7 +58,7 @@ def handleHealth (_req : ServerRequest) : IO Response := do
 /-- Create and configure the server -/
 def create (cfg : Config) (db : Storage.Database) : Citadel.Server :=
   Citadel.Server.create { port := cfg.port, host := cfg.host }
-    |>.post "/rpc" (handleRpc db)
+    |>.post "/rpc" (handleRpc db cfg)
     |>.get "/health" handleHealth
 
 /-- Run the server (blocking) -/
