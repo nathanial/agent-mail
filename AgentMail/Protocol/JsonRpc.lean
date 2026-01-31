@@ -7,7 +7,7 @@ namespace AgentMail.JsonRpc
 
 /-- JSON-RPC request ID - can be a number or string -/
 inductive RequestId where
-  | num : Nat → RequestId
+  | num : Int → RequestId
   | str : String → RequestId
   deriving Repr, DecidableEq
 
@@ -20,7 +20,7 @@ instance : Lean.ToJson RequestId where
 
 instance : Lean.FromJson RequestId where
   fromJson? j :=
-    match j.getNat? with
+    match j.getInt? with
     | Except.ok n => pure (num n)
     | Except.error _ =>
       match j.getStr? with

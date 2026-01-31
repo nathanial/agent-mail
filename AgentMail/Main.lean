@@ -14,11 +14,12 @@ def main : IO Unit := do
   -- Open database connection
   let db ← Storage.Database.openFile cfg.databasePath
 
-  -- Run server (blocking)
-  Server.run cfg db
-
-  -- Close database on shutdown
-  db.close
+  try
+    -- Run server (blocking)
+    Server.run cfg db
+  finally
+    -- Close database on shutdown or error
+    db.close
 
 end AgentMail
 

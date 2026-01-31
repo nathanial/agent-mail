@@ -31,11 +31,15 @@ def handleRpc (_db : Storage.Database) (req : ServerRequest) : IO Response := do
       let resp := JsonRpc.Response.failure none err
       return Response.json (Lean.Json.compress (Lean.toJson resp))
     | Except.ok (rpcReq : JsonRpc.Request) =>
-      -- For Phase 1, all methods return "method not found"
-      -- Phase 2 will implement actual handlers
-      let err := JsonRpc.Error.methodNotFound rpcReq.method
-      let resp := JsonRpc.Response.failure rpcReq.id err
-      pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
+      -- Notifications must not return a response
+      if rpcReq.isNotification then
+        pure Response.noContent
+      else
+        -- For Phase 1, all methods return "method not found"
+        -- Phase 2 will implement actual handlers
+        let err := JsonRpc.Error.methodNotFound rpcReq.method
+        let resp := JsonRpc.Response.failure rpcReq.id err
+        pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
 
 /-- Handle health check requests -/
 def handleHealth (_req : ServerRequest) : IO Response := do

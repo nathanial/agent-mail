@@ -23,8 +23,8 @@ def schema : Array String := #[
     program TEXT NOT NULL,
     model TEXT NOT NULL,
     task_description TEXT DEFAULT '',
-    contact_policy TEXT DEFAULT 'open',
-    attachments_policy TEXT DEFAULT 'accept',
+    contact_policy TEXT DEFAULT 'auto',
+    attachments_policy TEXT DEFAULT 'auto',
     inception_ts INTEGER NOT NULL,
     last_active_ts INTEGER NOT NULL,
     UNIQUE(project_id, name)

@@ -25,7 +25,7 @@ test "ContactPolicy JSON roundtrip" := do
   | Except.error e => throw (IO.userError s!"Failed to parse: {e}")
 
 test "AttachmentsPolicy roundtrip" := do
-  let policies := #[AttachmentsPolicy.accept, AttachmentsPolicy.reject, AttachmentsPolicy.linksOnly]
+  let policies := #[AttachmentsPolicy.auto, AttachmentsPolicy.inline, AttachmentsPolicy.file]
   for p in policies do
     let str := p.toString
     let parsed := AttachmentsPolicy.fromString? str
@@ -85,7 +85,7 @@ test "JSON roundtrip" := do
     model := "opus-4.5"
     taskDescription := "Building features"
     contactPolicy := ContactPolicy.openPolicy
-    attachmentsPolicy := AttachmentsPolicy.accept
+    attachmentsPolicy := AttachmentsPolicy.auto
     inceptionTs := now
     lastActiveTs := now
   }

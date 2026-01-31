@@ -42,22 +42,22 @@ end ContactPolicy
 
 /-- Attachments policy for an agent -/
 inductive AttachmentsPolicy where
-  | accept    -- Accept attachments
-  | reject    -- Reject all attachments
-  | linksOnly -- Only accept links, no binary attachments
+  | auto    -- Default behavior (server decides)
+  | inline  -- Inline attachments when possible
+  | file    -- Store attachments as files
   deriving Repr, DecidableEq, Inhabited
 
 namespace AttachmentsPolicy
 
 def toString : AttachmentsPolicy → String
-  | accept => "accept"
-  | reject => "reject"
-  | linksOnly => "links_only"
+  | auto => "auto"
+  | inline => "inline"
+  | file => "file"
 
 def fromString? : String → Option AttachmentsPolicy
-  | "accept" => some accept
-  | "reject" => some reject
-  | "links_only" => some linksOnly
+  | "auto" => some auto
+  | "inline" => some inline
+  | "file" => some file
   | _ => none
 
 instance : Lean.ToJson AttachmentsPolicy where
