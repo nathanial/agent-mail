@@ -4,8 +4,10 @@
 import Chronos
 import Citadel
 import Rune
+import AgentMail.Config
 import AgentMail.Protocol.JsonRpc
 import AgentMail.Storage.Database
+import AgentMail.Storage.Archive
 import AgentMail.Tools.Identity
 
 open Citadel
@@ -97,7 +99,7 @@ private def fileReservationConflicts (existing : AgentMail.FileReservation) (can
     patternsOverlap existing.pathPattern candidatePath
 
 /-- Handle file_reservation_paths request -/
-def handleFileReservationPaths (db : Storage.Database) (req : JsonRpc.Request) : IO Response := do
+def handleFileReservationPaths (db : Storage.Database) (cfg : Config) (req : JsonRpc.Request) : IO Response := do
   let params := req.params.getD Lean.Json.null
 
   -- Extract required params
@@ -161,6 +163,7 @@ def handleFileReservationPaths (db : Storage.Database) (req : JsonRpc.Request) :
   -- Process each requested path (advisory: always grant, report conflicts)
   let mut granted : Array Lean.Json := #[]
   let mut conflicts : Array Lean.Json := #[]
+  let mut archiveRecords : Array Lean.Json := #[]
 
   for path in paths do
     let mut holders : Array Lean.Json := #[]
@@ -169,11 +172,12 @@ def handleFileReservationPaths (db : Storage.Database) (req : JsonRpc.Request) :
         let conflictAgentName ← match ← db.queryAgentById existing.agentId with
           | some a => pure a.name
           | none => pure s!"Agent#{existing.agentId}"
+        let existingExpiresIso ← Storage.timestampToIso existing.expiresTs
         holders := holders.push (Lean.Json.mkObj [
           ("agent", Lean.Json.str conflictAgentName),
           ("path_pattern", Lean.Json.str existing.pathPattern),
           ("exclusive", Lean.Json.bool existing.exclusive),
-          ("expires_ts", Lean.Json.num existing.expiresTs.seconds)
+          ("expires_ts", Lean.Json.str existingExpiresIso)
         ])
     if holders.size > 0 then
       conflicts := conflicts.push (Lean.Json.mkObj [
@@ -182,13 +186,29 @@ def handleFileReservationPaths (db : Storage.Database) (req : JsonRpc.Request) :
       ])
 
     let reservationId ← db.insertFileReservation project.id agent.id path exclusive reason now expiresTs
+    let createdIso ← Storage.timestampToIso now
+    let expiresIso ← Storage.timestampToIso expiresTs
     granted := granted.push (Lean.Json.mkObj [
       ("id", Lean.Json.num reservationId),
       ("path_pattern", Lean.Json.str path),
       ("exclusive", Lean.Json.bool exclusive),
       ("reason", Lean.Json.str reason),
-      ("expires_ts", Lean.Json.num expiresTs.seconds)
+      ("expires_ts", Lean.Json.str expiresIso)
     ])
+    archiveRecords := archiveRecords.push (Lean.Json.mkObj [
+      ("id", Lean.Json.num reservationId),
+      ("project", Lean.Json.str project.humanKey),
+      ("agent", Lean.Json.str agent.name),
+      ("path_pattern", Lean.Json.str path),
+      ("exclusive", Lean.Json.bool exclusive),
+      ("reason", Lean.Json.str reason),
+      ("created_ts", Lean.Json.str createdIso),
+      ("expires_ts", Lean.Json.str expiresIso)
+    ])
+
+  if !archiveRecords.isEmpty then
+    let archive ← Storage.ensureProjectArchive cfg project.slug
+    Storage.writeFileReservationRecords archive archiveRecords
 
   let result := Lean.Json.mkObj [
     ("granted", Lean.Json.arr granted),
@@ -198,7 +218,7 @@ def handleFileReservationPaths (db : Storage.Database) (req : JsonRpc.Request) :
   pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
 
 /-- Handle release_file_reservations request -/
-def handleReleaseFileReservations (db : Storage.Database) (req : JsonRpc.Request) : IO Response := do
+def handleReleaseFileReservations (db : Storage.Database) (cfg : Config) (req : JsonRpc.Request) : IO Response := do
   let params := req.params.getD Lean.Json.null
 
   -- Extract required params
@@ -246,6 +266,7 @@ def handleReleaseFileReservations (db : Storage.Database) (req : JsonRpc.Request
 
   let now ← Chronos.Timestamp.now
   let mut releasedCount : Nat := 0
+  let mut releasedRecords : Array Lean.Json := #[]
   let agentReservations ← db.queryFileReservationsByAgent project.id agent.id
   for res in agentReservations do
     if res.releasedTs.isSome then
@@ -259,16 +280,36 @@ def handleReleaseFileReservations (db : Storage.Database) (req : JsonRpc.Request
     let success ← db.updateFileReservationReleased res.id now
     if success then
       releasedCount := releasedCount + 1
+      let createdIso ← Storage.timestampToIso res.createdTs
+      let releaseIso ← Storage.timestampToIso now
+      let expiresBase := if res.expiresTs.seconds > now.seconds then now else res.expiresTs
+      let expiresIso ← Storage.timestampToIso expiresBase
+      releasedRecords := releasedRecords.push (Lean.Json.mkObj [
+        ("id", Lean.Json.num res.id),
+        ("project", Lean.Json.str project.humanKey),
+        ("agent", Lean.Json.str agent.name),
+        ("path_pattern", Lean.Json.str res.pathPattern),
+        ("exclusive", Lean.Json.bool res.exclusive),
+        ("reason", Lean.Json.str res.reason),
+        ("created_ts", Lean.Json.str createdIso),
+        ("expires_ts", Lean.Json.str expiresIso),
+        ("released_ts", Lean.Json.str releaseIso)
+      ])
 
+  if !releasedRecords.isEmpty then
+    let archive ← Storage.ensureProjectArchive cfg project.slug
+    Storage.writeFileReservationRecords archive releasedRecords
+
+  let releasedAtIso ← Storage.timestampToIso now
   let result := Lean.Json.mkObj [
     ("released", Lean.Json.num releasedCount),
-    ("released_at", Lean.Json.num now.seconds)
+    ("released_at", Lean.Json.str releasedAtIso)
   ]
   let resp := JsonRpc.Response.success req.id result
   pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
 
 /-- Handle renew_file_reservations request -/
-def handleRenewFileReservations (db : Storage.Database) (req : JsonRpc.Request) : IO Response := do
+def handleRenewFileReservations (db : Storage.Database) (cfg : Config) (req : JsonRpc.Request) : IO Response := do
   let params := req.params.getD Lean.Json.null
 
   -- Extract required params
@@ -324,6 +365,7 @@ def handleRenewFileReservations (db : Storage.Database) (req : JsonRpc.Request) 
 
   let now ← Chronos.Timestamp.now
   let mut updated : Array Lean.Json := #[]
+  let mut archiveRecords : Array Lean.Json := #[]
 
   let agentReservations ← db.queryFileReservationsByAgent project.id agent.id
   for res in agentReservations do
@@ -339,12 +381,30 @@ def handleRenewFileReservations (db : Storage.Database) (req : JsonRpc.Request) 
     let newExpiresTs := Chronos.Timestamp.fromSeconds (base + extendSeconds)
     let success ← db.updateFileReservationExpires res.id newExpiresTs
     if success then
+      let oldIso ← Storage.timestampToIso res.expiresTs
+      let newIso ← Storage.timestampToIso newExpiresTs
       updated := updated.push (Lean.Json.mkObj [
         ("id", Lean.Json.num res.id),
         ("path_pattern", Lean.Json.str res.pathPattern),
-        ("old_expires_ts", Lean.Json.num res.expiresTs.seconds),
-        ("new_expires_ts", Lean.Json.num newExpiresTs.seconds)
+        ("old_expires_ts", Lean.Json.str oldIso),
+        ("new_expires_ts", Lean.Json.str newIso)
       ])
+      let createdIso ← Storage.timestampToIso res.createdTs
+      let expiresIso ← Storage.timestampToIso newExpiresTs
+      archiveRecords := archiveRecords.push (Lean.Json.mkObj [
+        ("id", Lean.Json.num res.id),
+        ("project", Lean.Json.str project.humanKey),
+        ("agent", Lean.Json.str agent.name),
+        ("path_pattern", Lean.Json.str res.pathPattern),
+        ("exclusive", Lean.Json.bool res.exclusive),
+        ("reason", Lean.Json.str res.reason),
+        ("created_ts", Lean.Json.str createdIso),
+        ("expires_ts", Lean.Json.str expiresIso)
+      ])
+
+  if !archiveRecords.isEmpty then
+    let archive ← Storage.ensureProjectArchive cfg project.slug
+    Storage.writeFileReservationRecords archive archiveRecords
 
   let result := Lean.Json.mkObj [
     ("renewed", Lean.Json.num updated.size),
@@ -354,7 +414,7 @@ def handleRenewFileReservations (db : Storage.Database) (req : JsonRpc.Request) 
   pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
 
 /-- Handle force_release_file_reservation request -/
-def handleForceReleaseFileReservation (db : Storage.Database) (req : JsonRpc.Request) : IO Response := do
+def handleForceReleaseFileReservation (db : Storage.Database) (cfg : Config) (req : JsonRpc.Request) : IO Response := do
   let params := req.params.getD Lean.Json.null
 
   -- Extract required params
@@ -437,17 +497,39 @@ def handleForceReleaseFileReservation (db : Storage.Database) (req : JsonRpc.Req
     | some a => pure a.name
     | none => pure s!"Agent#{reservation.agentId}"
 
+  if released then
+    let createdIso ← Storage.timestampToIso reservation.createdTs
+    let releaseIso ← Storage.timestampToIso releaseTs
+    let expiresBase := if reservation.expiresTs.seconds > releaseTs.seconds then releaseTs else reservation.expiresTs
+    let expiresIso ← Storage.timestampToIso expiresBase
+    let archive ← Storage.ensureProjectArchive cfg project.slug
+    let record := Lean.Json.mkObj [
+      ("id", Lean.Json.num reservation.id),
+      ("project", Lean.Json.str project.humanKey),
+      ("agent", Lean.Json.str holderName),
+      ("path_pattern", Lean.Json.str reservation.pathPattern),
+      ("exclusive", Lean.Json.bool reservation.exclusive),
+      ("reason", Lean.Json.str reservation.reason),
+      ("created_ts", Lean.Json.str createdIso),
+      ("expires_ts", Lean.Json.str expiresIso),
+      ("released_ts", Lean.Json.str releaseIso)
+    ]
+    Storage.writeFileReservationRecords archive #[record]
+
+  let createdIso ← Storage.timestampToIso reservation.createdTs
+  let expiresIso ← Storage.timestampToIso reservation.expiresTs
+  let releasedIso ← Storage.timestampToIso releasedAt
   let reservationJson := Lean.Json.mkObj [
     ("id", Lean.Json.num reservation.id),
     ("agent", Lean.Json.str holderName),
     ("path_pattern", Lean.Json.str reservation.pathPattern),
     ("exclusive", Lean.Json.bool reservation.exclusive),
     ("reason", Lean.Json.str reservation.reason),
-    ("created_ts", Lean.Json.num reservation.createdTs.seconds),
-    ("expires_ts", Lean.Json.num reservation.expiresTs.seconds),
+    ("created_ts", Lean.Json.str createdIso),
+    ("expires_ts", Lean.Json.str expiresIso),
     ("released_ts", match reservation.releasedTs with
-      | some ts => Lean.Json.num ts.seconds
-      | none => Lean.Json.num releaseTs.seconds),
+      | some _ => Lean.Json.str releasedIso
+      | none => Lean.Json.str releasedIso),
     ("stale_reasons", Lean.Json.arr #[]),
     ("last_agent_activity_ts", Lean.Json.null),
     ("last_mail_activity_ts", Lean.Json.null),
@@ -458,7 +540,7 @@ def handleForceReleaseFileReservation (db : Storage.Database) (req : JsonRpc.Req
 
   let result := Lean.Json.mkObj [
     ("released", Lean.Json.num (if released then 1 else 0)),
-    ("released_at", Lean.Json.num releasedAt.seconds),
+    ("released_at", Lean.Json.str releasedIso),
     ("reservation", reservationJson)
   ]
   let resp := JsonRpc.Response.success req.id result

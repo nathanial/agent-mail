@@ -1421,6 +1421,11 @@ def mkAgent (projectId : Nat) (name : String) (now : Chronos.Timestamp) : Agent 
   lastActiveTs := now
 }
 
+def testConfig : Config := {
+  Config.default with
+  storageRoot := "/tmp/agent-mail-test-archive"
+}
+
 def parseJsonRpcResponse (resp : Response) : IO JsonRpc.Response := do
   let body := String.fromUTF8! resp.body
   let json := Lean.Json.parse body
@@ -1462,7 +1467,7 @@ test "file_reservation_paths grants reservations" := do
     params := some params
     id := some (JsonRpc.RequestId.num 1)
   }
-  let resp ← handleFileReservationPaths db req
+  let resp ← handleFileReservationPaths db testConfig req
   let rpcResp ← parseJsonRpcResponse resp
   match rpcResp.result with
   | some result =>
@@ -1505,7 +1510,7 @@ test "file_reservation_paths detects conflicts" := do
     params := some params
     id := some (JsonRpc.RequestId.num 2)
   }
-  let resp ← handleFileReservationPaths db req
+  let resp ← handleFileReservationPaths db testConfig req
   let rpcResp ← parseJsonRpcResponse resp
   match rpcResp.result with
   | some result =>
@@ -1551,7 +1556,7 @@ test "file_reservation_paths allows shared reservations" := do
     params := some params
     id := some (JsonRpc.RequestId.num 3)
   }
-  let resp ← handleFileReservationPaths db req
+  let resp ← handleFileReservationPaths db testConfig req
   let rpcResp ← parseJsonRpcResponse resp
   match rpcResp.result with
   | some result =>
@@ -1584,7 +1589,7 @@ test "release_file_reservations by IDs" := do
     params := some params
     id := some (JsonRpc.RequestId.num 4)
   }
-  let resp ← handleReleaseFileReservations db req
+  let resp ← handleReleaseFileReservations db testConfig req
   let rpcResp ← parseJsonRpcResponse resp
   match rpcResp.result with
   | some result =>
@@ -1616,7 +1621,7 @@ test "release_file_reservations by paths" := do
     params := some params
     id := some (JsonRpc.RequestId.num 5)
   }
-  let resp ← handleReleaseFileReservations db req
+  let resp ← handleReleaseFileReservations db testConfig req
   let rpcResp ← parseJsonRpcResponse resp
   match rpcResp.result with
   | some result =>
@@ -1644,7 +1649,7 @@ test "renew_file_reservations extends TTL" := do
     params := some params
     id := some (JsonRpc.RequestId.num 6)
   }
-  let resp ← handleRenewFileReservations db req
+  let resp ← handleRenewFileReservations db testConfig req
   let rpcResp ← parseJsonRpcResponse resp
   match rpcResp.result with
   | some result =>
@@ -1682,7 +1687,7 @@ test "renew_file_reservations fails for other agent's reservations" := do
     params := some params
     id := some (JsonRpc.RequestId.num 7)
   }
-  let resp ← handleRenewFileReservations db req
+  let resp ← handleRenewFileReservations db testConfig req
   let rpcResp ← parseJsonRpcResponse resp
   match rpcResp.result with
   | some result =>
@@ -1714,7 +1719,7 @@ test "force_release_file_reservation releases any reservation" := do
     params := some params
     id := some (JsonRpc.RequestId.num 8)
   }
-  let resp ← handleForceReleaseFileReservation db req
+  let resp ← handleForceReleaseFileReservation db testConfig req
   let rpcResp ← parseJsonRpcResponse resp
   match rpcResp.result with
   | some result =>
@@ -1756,7 +1761,7 @@ test "force_release_file_reservation rejects wrong project" := do
     params := some params
     id := some (JsonRpc.RequestId.num 9)
   }
-  let resp ← handleForceReleaseFileReservation db req
+  let resp ← handleForceReleaseFileReservation db testConfig req
   let rpcResp ← parseJsonRpcResponse resp
   match rpcResp.error with
   | some err =>
@@ -1788,7 +1793,7 @@ test "same agent can re-reserve own patterns" := do
     params := some params
     id := some (JsonRpc.RequestId.num 10)
   }
-  let resp ← handleFileReservationPaths db req
+  let resp ← handleFileReservationPaths db testConfig req
   let rpcResp ← parseJsonRpcResponse resp
   match rpcResp.result with
   | some result =>
@@ -1805,5 +1810,173 @@ test "same agent can re-reserve own patterns" := do
   db.close
 
 end Tests.FileReservationTools
+
+namespace Tests.GitGuard
+
+testSuite "GitGuard"
+
+open AgentMail.Git.Guard
+
+test "renderChainRunner contains marker" := do
+  let script := renderChainRunner "pre-commit"
+  shouldSatisfy (script.find? chainRunnerMarker |>.isSome) "should contain chain runner marker"
+  shouldSatisfy (script.find? "pre-commit" |>.isSome) "should contain hook name"
+
+test "renderChainRunner is valid python" := do
+  let script := renderChainRunner "pre-push"
+  shouldSatisfy (script.find? "#!/usr/bin/env python3" |>.isSome) "should have python shebang"
+  shouldSatisfy (script.find? "hooks.d" |>.isSome) "should reference hooks.d directory"
+
+test "renderPrecommitGuard contains marker" := do
+  let script := renderPrecommitGuard "/tmp/archive" "/tmp/archive/file_reservations"
+  shouldSatisfy (script.find? guardPluginMarker |>.isSome) "should contain guard plugin marker"
+  shouldSatisfy (script.find? "#!/usr/bin/env python3" |>.isSome) "should have python shebang"
+
+test "renderPrecommitGuard embeds config" := do
+  let script := renderPrecommitGuard "/tmp/archive" "/tmp/archive/file_reservations"
+  shouldSatisfy (script.find? "/tmp/archive" |>.isSome) "should contain storage root"
+  shouldSatisfy (script.find? "/tmp/archive/file_reservations" |>.isSome) "should contain file reservations dir"
+
+test "isChainRunnerContent detects chain runner" := do
+  let script := renderChainRunner "pre-commit"
+  shouldSatisfy (isChainRunnerContent script) "should detect chain runner content"
+  shouldSatisfy (not (isChainRunnerContent "#!/bin/bash\nsome other script")) "should not detect non-chain-runner"
+  shouldSatisfy (not (isChainRunnerContent "")) "should not detect empty content"
+
+test "isGuardPluginContent detects guard plugin" := do
+  let script := renderPrecommitGuard "/tmp/archive" "/tmp/archive/file_reservations"
+  shouldSatisfy (isGuardPluginContent script) "should detect guard plugin content"
+  shouldSatisfy (not (isGuardPluginContent "#!/usr/bin/env python3\nsome other script")) "should not detect non-guard"
+
+test "InstallResult JSON serialization" := do
+  let result : InstallResult := {
+    hook := "/path/to/hooks/pre-commit"
+  }
+  let json := Lean.toJson result
+  let str := Lean.Json.compress json
+  shouldSatisfy (str.find? "\"hook\"" |>.isSome) "should contain hook"
+
+test "UninstallResult JSON serialization" := do
+  let result : UninstallResult := {
+    removed := true
+  }
+  let json := Lean.toJson result
+  let str := Lean.Json.compress json
+  shouldSatisfy (str.find? "\"removed\":true" |>.isSome) "should contain removed"
+
+end Tests.GitGuard
+
+namespace Tests.GitGuardTools
+
+testSuite "GitGuardTools"
+
+open Citadel
+open AgentMail.Tools.GitGuard
+
+def testConfig : Config := {
+  Config.default with
+  storageRoot := "/tmp/agent-mail-test-archive"
+  worktreesEnabled := true
+}
+
+def parseJsonRpcResponse (resp : Response) : IO JsonRpc.Response := do
+  let body := String.fromUTF8! resp.body
+  let json := Lean.Json.parse body
+  match json with
+  | Except.ok j =>
+      match (Lean.FromJson.fromJson? j : Except String JsonRpc.Response) with
+      | Except.ok r => pure r
+      | Except.error e => throw (IO.userError s!"Failed to decode JSON-RPC response: {e}")
+  | Except.error e => throw (IO.userError s!"Failed to parse JSON: {e}")
+
+test "install_precommit_guard requires project_key" := do
+  let db ← Storage.Database.openMemory
+  let params := Lean.Json.mkObj [
+    ("code_repo_path", Lean.Json.str "/tmp/test")
+  ]
+  let req : JsonRpc.Request := {
+    method := "install_precommit_guard"
+    params := some params
+    id := some (JsonRpc.RequestId.num 1)
+  }
+  let resp ← handleInstallPrecommitGuard db testConfig req
+  let rpcResp ← parseJsonRpcResponse resp
+  match rpcResp.error with
+  | some err =>
+      err.message ≡ "Invalid params"
+      match err.data with
+      | some (Lean.Json.str details) =>
+          details ≡ "missing required param: project_key"
+      | _ => throw (IO.userError "Expected error details string")
+  | none => throw (IO.userError "Expected error response")
+  db.close
+
+test "install_precommit_guard requires code_repo_path" := do
+  let db ← Storage.Database.openMemory
+  let params := Lean.Json.mkObj [
+    ("project_key", Lean.Json.str "/test")
+  ]
+  let req : JsonRpc.Request := {
+    method := "install_precommit_guard"
+    params := some params
+    id := some (JsonRpc.RequestId.num 2)
+  }
+  let resp ← handleInstallPrecommitGuard db testConfig req
+  let rpcResp ← parseJsonRpcResponse resp
+  match rpcResp.error with
+  | some err =>
+      err.message ≡ "Invalid params"
+      match err.data with
+      | some (Lean.Json.str details) =>
+          details ≡ "missing required param: code_repo_path"
+      | _ => throw (IO.userError "Expected error details string")
+  | none => throw (IO.userError "Expected error response")
+  db.close
+
+test "install_precommit_guard validates project exists" := do
+  let db ← Storage.Database.openMemory
+  let params := Lean.Json.mkObj [
+    ("project_key", Lean.Json.str "/nonexistent"),
+    ("code_repo_path", Lean.Json.str "/tmp/test")
+  ]
+  let req : JsonRpc.Request := {
+    method := "install_precommit_guard"
+    params := some params
+    id := some (JsonRpc.RequestId.num 3)
+  }
+  let resp ← handleInstallPrecommitGuard db testConfig req
+  let rpcResp ← parseJsonRpcResponse resp
+  match rpcResp.error with
+  | some err =>
+      err.message ≡ "Invalid params"
+      match err.data with
+      | some (Lean.Json.str details) =>
+          details ≡ "project not found: /nonexistent"
+      | _ => throw (IO.userError "Expected error details string")
+  | none => throw (IO.userError "Expected error response")
+  db.close
+
+test "uninstall_precommit_guard requires code_repo_path" := do
+  let db ← Storage.Database.openMemory
+  let params := Lean.Json.mkObj [
+  ]
+  let req : JsonRpc.Request := {
+    method := "uninstall_precommit_guard"
+    params := some params
+    id := some (JsonRpc.RequestId.num 4)
+  }
+  let resp ← handleUninstallPrecommitGuard db testConfig req
+  let rpcResp ← parseJsonRpcResponse resp
+  match rpcResp.error with
+  | some err =>
+      err.message ≡ "Invalid params"
+      match err.data with
+      | some (Lean.Json.str details) =>
+          details ≡ "missing required param: code_repo_path"
+      | _ => throw (IO.userError "Expected error details string")
+  | none => throw (IO.userError "Expected error response")
+  db.close
+
+end Tests.GitGuardTools
 
 def main : IO UInt32 := runAllSuites

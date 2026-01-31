@@ -6,6 +6,7 @@ import Citadel
 import AgentMail.Config
 import AgentMail.Protocol.JsonRpc
 import AgentMail.Storage.Database
+import AgentMail.Storage.Archive
 import AgentMail.Utils.NameGenerator
 
 open Citadel
@@ -61,7 +62,7 @@ def handleHealthCheck (db : Storage.Database) (cfg : Config) (req : JsonRpc.Requ
   pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
 
 /-- Handle ensure_project request -/
-def handleEnsureProject (db : Storage.Database) (req : JsonRpc.Request) : IO Response := do
+def handleEnsureProject (db : Storage.Database) (cfg : Config) (req : JsonRpc.Request) : IO Response := do
   -- Extract params
   let params := req.params.getD Lean.Json.null
   let humanKey ← match params.getObjValAs? String "human_key" with
@@ -74,20 +75,21 @@ def handleEnsureProject (db : Storage.Database) (req : JsonRpc.Request) : IO Res
   -- Check if project already exists
   match ← db.queryProjectByHumanKey humanKey with
   | some project =>
-    -- Return existing project
+    -- Ensure archive exists
+    let _ ← Storage.ensureProjectArchive cfg project.slug
     let resp := JsonRpc.Response.success req.id (Lean.toJson project)
     pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
   | none =>
-    -- Create new project
     let now ← Chronos.Timestamp.now
     let slug ← generateUniqueSlug db humanKey
     let id ← db.insertProject slug humanKey now
     let project : Project := { id, slug, humanKey, createdAt := now }
+    let _ ← Storage.ensureProjectArchive cfg project.slug
     let resp := JsonRpc.Response.success req.id (Lean.toJson project)
     pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
 
 /-- Handle register_agent request -/
-def handleRegisterAgent (db : Storage.Database) (req : JsonRpc.Request) : IO Response := do
+def handleRegisterAgent (db : Storage.Database) (cfg : Config) (req : JsonRpc.Request) : IO Response := do
   -- Extract params
   let params := req.params.getD Lean.Json.null
 
@@ -148,6 +150,8 @@ def handleRegisterAgent (db : Storage.Database) (req : JsonRpc.Request) : IO Res
         lastActiveTs := now
       }
       db.updateAgentProfile updatedAgent
+      let archive ← Storage.ensureProjectArchive cfg project.slug
+      Storage.writeAgentProfile archive updatedAgent
       let resp := JsonRpc.Response.success req.id (Lean.toJson updatedAgent)
       pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
     | none =>
@@ -167,6 +171,8 @@ def handleRegisterAgent (db : Storage.Database) (req : JsonRpc.Request) : IO Res
       }
       let id ← db.insertAgent agent
       let newAgent := { agent with id }
+      let archive ← Storage.ensureProjectArchive cfg project.slug
+      Storage.writeAgentProfile archive newAgent
       let resp := JsonRpc.Response.success req.id (Lean.toJson newAgent)
       pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
   | none =>
@@ -200,11 +206,13 @@ def handleRegisterAgent (db : Storage.Database) (req : JsonRpc.Request) : IO Res
     }
     let id ← db.insertAgent agent
     let newAgent := { agent with id }
+    let archive ← Storage.ensureProjectArchive cfg project.slug
+    Storage.writeAgentProfile archive newAgent
     let resp := JsonRpc.Response.success req.id (Lean.toJson newAgent)
     pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
 
 /-- Handle whois request -/
-def handleWhois (db : Storage.Database) (req : JsonRpc.Request) : IO Response := do
+def handleWhois (db : Storage.Database) (_cfg : Config) (req : JsonRpc.Request) : IO Response := do
   -- Extract params
   let params := req.params.getD Lean.Json.null
 
@@ -244,7 +252,7 @@ def handleWhois (db : Storage.Database) (req : JsonRpc.Request) : IO Response :=
       ("attachments_policy", Lean.toJson agent.attachmentsPolicy),
       ("inception_ts", Lean.Json.num agent.inceptionTs.seconds),
       ("last_active_ts", Lean.Json.num agent.lastActiveTs.seconds),
-      ("recent_commits", Lean.Json.arr #[])  -- Placeholder for Phase 6
+      ("recent_commits", Lean.Json.arr #[])
     ]
     let resp := JsonRpc.Response.success req.id result
     pure (Response.json (Lean.Json.compress (Lean.toJson resp)))

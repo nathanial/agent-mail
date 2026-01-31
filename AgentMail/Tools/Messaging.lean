@@ -3,8 +3,10 @@
 -/
 import Chronos
 import Citadel
+import AgentMail.Config
 import AgentMail.Protocol.JsonRpc
 import AgentMail.Storage.Database
+import AgentMail.Storage.Archive
 import AgentMail.Tools.Identity
 
 open Citadel
@@ -32,7 +34,7 @@ def parseSinceTs (raw : String) : IO (Option Int) := do
     | Except.error _ => pure none
 
 /-- Handle send_message request -/
-def handleSendMessage (db : Storage.Database) (req : JsonRpc.Request) : IO Response := do
+def handleSendMessage (db : Storage.Database) (cfg : Config) (req : JsonRpc.Request) : IO Response := do
   let params := req.params.getD Lean.Json.null
 
   -- Extract required params
@@ -186,6 +188,27 @@ def handleSendMessage (db : Storage.Database) (req : JsonRpc.Request) : IO Respo
     }
     db.insertMessageRecipient recipient
 
+  -- Write archive artifacts
+  let archive ← Storage.ensureProjectArchive cfg project.slug
+  let createdIso ← Storage.timestampToIso now
+  let frontmatter := Lean.Json.mkObj [
+    ("id", Lean.Json.num messageId),
+    ("thread_id", match threadIdOpt with | some t => Lean.Json.str t | none => Lean.Json.null),
+    ("project", Lean.Json.str project.humanKey),
+    ("project_slug", Lean.Json.str project.slug),
+    ("from", Lean.Json.str sender.name),
+    ("to", Lean.toJson toNames),
+    ("cc", Lean.toJson ccNames),
+    ("bcc", Lean.toJson bccNames),
+    ("subject", Lean.Json.str subject),
+    ("importance", Lean.toJson importance),
+    ("ack_required", Lean.Json.bool ackRequired),
+    ("created", Lean.Json.str createdIso),
+    ("attachments", Lean.toJson attachmentPaths)
+  ]
+  let recipientsForArchive := toNames ++ ccNames ++ bccNames
+  Storage.writeMessageBundle archive frontmatter bodyMd sender.name recipientsForArchive now subject threadIdOpt
+
   -- Build response
   let payload := Lean.Json.mkObj [
     ("id", Lean.Json.num messageId),
@@ -215,7 +238,7 @@ def handleSendMessage (db : Storage.Database) (req : JsonRpc.Request) : IO Respo
   pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
 
 /-- Handle reply_message request -/
-def handleReplyMessage (db : Storage.Database) (req : JsonRpc.Request) : IO Response := do
+def handleReplyMessage (db : Storage.Database) (cfg : Config) (req : JsonRpc.Request) : IO Response := do
   let params := req.params.getD Lean.Json.null
 
   -- Extract required params
@@ -396,6 +419,27 @@ def handleReplyMessage (db : Storage.Database) (req : JsonRpc.Request) : IO Resp
       ackedAt := none
     }
     db.insertMessageRecipient recipient
+
+  -- Write archive artifacts
+  let archive ← Storage.ensureProjectArchive cfg project.slug
+  let createdIso ← Storage.timestampToIso now
+  let frontmatter := Lean.Json.mkObj [
+    ("id", Lean.Json.num messageId),
+    ("thread_id", Lean.Json.str threadId),
+    ("project", Lean.Json.str project.humanKey),
+    ("project_slug", Lean.Json.str project.slug),
+    ("from", Lean.Json.str sender.name),
+    ("to", Lean.toJson toNames),
+    ("cc", Lean.toJson ccNames),
+    ("bcc", Lean.toJson bccNames),
+    ("subject", Lean.Json.str subject),
+    ("importance", Lean.toJson importance),
+    ("ack_required", Lean.Json.bool originalMsg.ackRequired),
+    ("created", Lean.Json.str createdIso),
+    ("attachments", Lean.toJson (#[] : Array String))
+  ]
+  let recipientsForArchive := toNames ++ ccNames ++ bccNames
+  Storage.writeMessageBundle archive frontmatter bodyMd sender.name recipientsForArchive now subject (some threadId)
 
   -- Build response
   let payload := Lean.Json.mkObj [

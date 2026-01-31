@@ -9,6 +9,7 @@ import AgentMail.Tools.Identity
 import AgentMail.Tools.Messaging
 import AgentMail.Tools.Contacts
 import AgentMail.Tools.FileReservations
+import AgentMail.Tools.GitGuard
 
 open Citadel
 
@@ -42,11 +43,11 @@ def handleRpc (db : Storage.Database) (cfg : Config) (req : ServerRequest) : IO 
         -- Route to appropriate handler
         match rpcReq.method with
         | "health_check" => Tools.Identity.handleHealthCheck db cfg rpcReq
-        | "ensure_project" => Tools.Identity.handleEnsureProject db rpcReq
-        | "register_agent" => Tools.Identity.handleRegisterAgent db rpcReq
-        | "whois" => Tools.Identity.handleWhois db rpcReq
-        | "send_message" => Tools.Messaging.handleSendMessage db rpcReq
-        | "reply_message" => Tools.Messaging.handleReplyMessage db rpcReq
+        | "ensure_project" => Tools.Identity.handleEnsureProject db cfg rpcReq
+        | "register_agent" => Tools.Identity.handleRegisterAgent db cfg rpcReq
+        | "whois" => Tools.Identity.handleWhois db cfg rpcReq
+        | "send_message" => Tools.Messaging.handleSendMessage db cfg rpcReq
+        | "reply_message" => Tools.Messaging.handleReplyMessage db cfg rpcReq
         | "fetch_inbox" => Tools.Messaging.handleFetchInbox db rpcReq
         | "mark_message_read" => Tools.Messaging.handleMarkRead db rpcReq
         | "acknowledge_message" => Tools.Messaging.handleAcknowledge db rpcReq
@@ -54,10 +55,12 @@ def handleRpc (db : Storage.Database) (cfg : Config) (req : ServerRequest) : IO 
         | "respond_contact" => Tools.Contacts.handleRespondContact db rpcReq
         | "list_contacts" => Tools.Contacts.handleListContacts db rpcReq
         | "set_contact_policy" => Tools.Contacts.handleSetContactPolicy db rpcReq
-        | "file_reservation_paths" => Tools.FileReservations.handleFileReservationPaths db rpcReq
-        | "release_file_reservations" => Tools.FileReservations.handleReleaseFileReservations db rpcReq
-        | "renew_file_reservations" => Tools.FileReservations.handleRenewFileReservations db rpcReq
-        | "force_release_file_reservation" => Tools.FileReservations.handleForceReleaseFileReservation db rpcReq
+        | "file_reservation_paths" => Tools.FileReservations.handleFileReservationPaths db cfg rpcReq
+        | "release_file_reservations" => Tools.FileReservations.handleReleaseFileReservations db cfg rpcReq
+        | "renew_file_reservations" => Tools.FileReservations.handleRenewFileReservations db cfg rpcReq
+        | "force_release_file_reservation" => Tools.FileReservations.handleForceReleaseFileReservation db cfg rpcReq
+        | "install_precommit_guard" => Tools.GitGuard.handleInstallPrecommitGuard db cfg rpcReq
+        | "uninstall_precommit_guard" => Tools.GitGuard.handleUninstallPrecommitGuard db cfg rpcReq
         | _ =>
           let err := JsonRpc.Error.methodNotFound rpcReq.method
           let resp := JsonRpc.Response.failure rpcReq.id err
