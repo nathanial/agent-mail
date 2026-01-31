@@ -19,4 +19,5 @@ import AgentMail.Tools.FileReservations
 import AgentMail.Git.Guard
 import AgentMail.Tools.GitGuard
 import AgentMail.Tools.Search
+import AgentMail.Tools.Macros
 import AgentMail.Server.Server

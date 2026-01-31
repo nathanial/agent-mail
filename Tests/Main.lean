@@ -24,6 +24,7 @@ import Tests.FileReservationTools
 import Tests.GitGuard
 import Tests.GitGuardTools
 import Tests.Search
+import Tests.Macros
 
 open Crucible
 
