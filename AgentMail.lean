@@ -18,4 +18,5 @@ import AgentMail.Tools.Contacts
 import AgentMail.Tools.FileReservations
 import AgentMail.Git.Guard
 import AgentMail.Tools.GitGuard
+import AgentMail.Tools.Search
 import AgentMail.Server.Server

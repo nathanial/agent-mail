@@ -757,6 +757,90 @@ where
       releasedTs := releasedTs.map Chronos.Timestamp.fromSeconds
     }
 
+-- =============================================================================
+-- Search queries
+-- =============================================================================
+
+/-- Message with sender name for search results -/
+structure MessageWithSender where
+  id : Nat
+  subject : String
+  bodyMd : String
+  importance : AgentMail.Importance
+  ackRequired : Bool
+  threadId : Option String
+  createdTs : Chronos.Timestamp
+  senderName : String
+  deriving Repr, Inhabited
+
+/-- Search result entry -/
+structure SearchResult where
+  id : Nat
+  subject : String
+  importance : AgentMail.Importance
+  ackRequired : Bool
+  createdTs : Chronos.Timestamp
+  threadId : Option String
+  senderName : String
+  deriving Repr, Inhabited
+
+/-- Query all messages in a thread with sender names -/
+def queryMessagesByThread (db : Database) (projectId : Nat) (threadId : String) (limit : Nat) : IO (Array MessageWithSender) := do
+  let threadEsc := threadId.replace "'" "''"
+  -- Pull the most recent messages, then return them in chronological order.
+  let sql := s!"SELECT m.id, m.subject, m.body_md, m.importance, m.ack_required, m.thread_id, m.created_ts, a.name FROM messages m JOIN agents a ON m.sender_id = a.id WHERE m.project_id = {projectId} AND m.thread_id = '{threadEsc}' ORDER BY m.created_ts DESC LIMIT {limit}"
+  let rows ← db.query sql
+  pure (rows.filterMap rowToMessage |>.reverse)
+where
+  rowToMessage (row : Quarry.Row) : Option MessageWithSender := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let subject ← row.get? 1 >>= fun v => match v with | .text s => some s | _ => none
+    let bodyMd ← row.get? 2 >>= fun v => match v with | .text s => some s | _ => none
+    let importanceStr ← row.get? 3 >>= fun v => match v with | .text s => some s | _ => none
+    let ackRequiredInt ← row.get? 4 >>= fun v => match v with | .integer n => some n | _ => none
+    let threadId : Option String := row.get? 5 >>= fun v => match v with | .text s => some s | _ => none
+    let createdTs ← row.get? 6 >>= fun v => match v with | .integer n => some n | _ => none
+    let senderName ← row.get? 7 >>= fun v => match v with | .text s => some s | _ => none
+    let importance := AgentMail.Importance.fromString? importanceStr |>.getD .normal
+    some {
+      id, subject, bodyMd, importance
+      ackRequired := ackRequiredInt != 0
+      threadId
+      createdTs := Chronos.Timestamp.fromSeconds createdTs
+      senderName
+    }
+
+/-- Search messages using LIKE on subject and body -/
+def searchMessages (db : Database) (projectId : Nat) (query : String) (limit : Nat) (threadIdOpt : Option String) (agentIdOpt : Option Nat) : IO (Array SearchResult) := do
+  let queryEsc := query.replace "\\" "\\\\" |>.replace "'" "''" |>.replace "%" "\\%" |>.replace "_" "\\_"
+  let threadClause := match threadIdOpt with
+    | some t => s!" AND m.thread_id = '{t.replace "'" "''"}'"
+    | none => ""
+  let agentClause := match agentIdOpt with
+    | some agentId =>
+      s!" AND (m.sender_id = {agentId} OR EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id = m.id AND r.agent_id = {agentId}))"
+    | none => ""
+  let sql := s!"SELECT m.id, m.subject, m.importance, m.ack_required, m.created_ts, m.thread_id, a.name FROM messages m JOIN agents a ON m.sender_id = a.id WHERE m.project_id = {projectId} AND (m.subject LIKE '%{queryEsc}%' ESCAPE '\\' OR m.body_md LIKE '%{queryEsc}%' ESCAPE '\\'){threadClause}{agentClause} ORDER BY m.created_ts DESC LIMIT {limit}"
+  let rows ← db.query sql
+  pure (rows.filterMap rowToResult)
+where
+  rowToResult (row : Quarry.Row) : Option SearchResult := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let subject ← row.get? 1 >>= fun v => match v with | .text s => some s | _ => none
+    let importanceStr ← row.get? 2 >>= fun v => match v with | .text s => some s | _ => none
+    let ackRequiredInt ← row.get? 3 >>= fun v => match v with | .integer n => some n | _ => none
+    let createdTs ← row.get? 4 >>= fun v => match v with | .integer n => some n | _ => none
+    let threadId : Option String := row.get? 5 >>= fun v => match v with | .text s => some s | _ => none
+    let senderName ← row.get? 6 >>= fun v => match v with | .text s => some s | _ => none
+    let importance := AgentMail.Importance.fromString? importanceStr |>.getD .normal
+    some {
+      id, subject, importance
+      ackRequired := ackRequiredInt != 0
+      createdTs := Chronos.Timestamp.fromSeconds createdTs
+      threadId
+      senderName
+    }
+
 end Database
 
 end AgentMail.Storage

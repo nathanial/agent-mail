@@ -23,6 +23,7 @@ import Tests.FileReservationDatabase
 import Tests.FileReservationTools
 import Tests.GitGuard
 import Tests.GitGuardTools
+import Tests.Search
 
 open Crucible
 

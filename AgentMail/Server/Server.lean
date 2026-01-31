@@ -10,6 +10,7 @@ import AgentMail.Tools.Messaging
 import AgentMail.Tools.Contacts
 import AgentMail.Tools.FileReservations
 import AgentMail.Tools.GitGuard
+import AgentMail.Tools.Search
 
 open Citadel
 
@@ -61,6 +62,8 @@ def handleRpc (db : Storage.Database) (cfg : Config) (req : ServerRequest) : IO 
         | "force_release_file_reservation" => Tools.FileReservations.handleForceReleaseFileReservation db cfg rpcReq
         | "install_precommit_guard" => Tools.GitGuard.handleInstallPrecommitGuard db cfg rpcReq
         | "uninstall_precommit_guard" => Tools.GitGuard.handleUninstallPrecommitGuard db cfg rpcReq
+        | "search_messages" => Tools.Search.handleSearchMessages db cfg rpcReq
+        | "summarize_thread" => Tools.Search.handleSummarizeThread db cfg rpcReq
         | _ =>
           let err := JsonRpc.Error.methodNotFound rpcReq.method
           let resp := JsonRpc.Response.failure rpcReq.id err
