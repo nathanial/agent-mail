@@ -5,6 +5,7 @@ import Chronos
 import AgentMail.Config
 import AgentMail.Models.Agent
 import AgentMail.Models.FileReservation
+import AgentMail.Models.BuildSlot
 import AgentMail.Models.Message
 
 namespace AgentMail.Storage
@@ -73,6 +74,7 @@ def ensureProjectArchive (cfg : Config) (slug : String) : IO ProjectArchive := d
   let _ ← IO.FS.createDirAll s!"{projectRoot}/agents"
   let _ ← IO.FS.createDirAll s!"{projectRoot}/messages"
   let _ ← IO.FS.createDirAll s!"{projectRoot}/file_reservations"
+  let _ ← IO.FS.createDirAll s!"{projectRoot}/build_slots"
   let _ ← IO.FS.createDirAll s!"{projectRoot}/attachments"
   let _ ← IO.FS.createDirAll s!"{projectRoot}/threads"
   pure {
@@ -256,5 +258,42 @@ def writeMessageBundle
       s!"Thread: {threadKey}"
     ]
   commitPaths archive relPaths (commitSubject ++ "\n\n" ++ commitBody ++ "\n")
+
+def writeBuildSlotRecords (archive : ProjectArchive) (records : Array Lean.Json) : IO Unit := do
+  if records.isEmpty then
+    pure ()
+  else
+    let mut relPaths : Array String := #[]
+    let mut entries : Array (String × String) := #[]
+    for record in records do
+      let slotName ← match record.getObjValAs? String "slot_name" with
+        | Except.ok s => pure s
+        | Except.error _ => throw (IO.userError "build slot record missing slot_name")
+      let agentName := match record.getObjValAs? String "agent" with
+        | Except.ok a => a
+        | Except.error _ => "unknown"
+      let digest ← sha1Hex slotName
+      let legacyPath := s!"{archive.projectRoot}/build_slots/{digest}.json"
+      writeJsonFile legacyPath record
+      relPaths := relPaths.push s!"projects/{archive.slug}/build_slots/{digest}.json"
+      match record.getObjValAs? Nat "id" with
+      | Except.ok id =>
+          let idPath := s!"{archive.projectRoot}/build_slots/id-{id}.json"
+          writeJsonFile idPath record
+          relPaths := relPaths.push s!"projects/{archive.slug}/build_slots/id-{id}.json"
+      | Except.error _ => pure ()
+      entries := entries.push (agentName, slotName)
+    let commitMessage :=
+      match entries.toList with
+      | [] => "build_slot: update"
+      | (firstAgent, firstSlot) :: rest =>
+          if rest.isEmpty then
+            s!"build_slot: {firstAgent} {firstSlot}"
+          else
+            let extra := rest.length
+            let subject := s!"build_slot: {firstAgent} {firstSlot} (+{extra} more)"
+            let body := String.intercalate "\n" (rest.map (fun (a, s) => s!"- {a} {s}"))
+            subject ++ "\n\n" ++ body
+    commitPaths archive relPaths commitMessage
 
 end AgentMail.Storage

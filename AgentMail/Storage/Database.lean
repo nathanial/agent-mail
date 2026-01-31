@@ -11,6 +11,7 @@ import AgentMail.Models.Types
 import AgentMail.Models.ContactRequest
 import AgentMail.Models.Contact
 import AgentMail.Models.FileReservation
+import AgentMail.Models.BuildSlot
 
 namespace AgentMail.Storage
 
@@ -76,6 +77,17 @@ def schema : Array String := #[
     released_ts INTEGER
   )",
 
+  -- Build slots table
+  "CREATE TABLE IF NOT EXISTS build_slots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL REFERENCES projects(id),
+    agent_id INTEGER NOT NULL REFERENCES agents(id),
+    slot_name TEXT NOT NULL,
+    created_ts INTEGER NOT NULL,
+    expires_ts INTEGER NOT NULL,
+    released_ts INTEGER
+  )",
+
   -- Contact requests table
   "CREATE TABLE IF NOT EXISTS contact_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,6 +120,8 @@ def schema : Array String := #[
   "CREATE INDEX IF NOT EXISTS idx_reservations_project ON file_reservations(project_id)",
   "CREATE INDEX IF NOT EXISTS idx_reservations_agent ON file_reservations(agent_id)",
   "CREATE INDEX IF NOT EXISTS idx_reservations_active ON file_reservations(expires_ts, released_ts)",
+  "CREATE INDEX IF NOT EXISTS idx_build_slots_active ON build_slots(project_id, slot_name, expires_ts)",
+  "CREATE INDEX IF NOT EXISTS idx_build_slots_agent ON build_slots(agent_id)",
   "CREATE INDEX IF NOT EXISTS idx_contact_requests_to ON contact_requests(to_agent_id)",
   "CREATE INDEX IF NOT EXISTS idx_contact_requests_from ON contact_requests(from_agent_id)",
   "CREATE INDEX IF NOT EXISTS idx_contacts_agent1 ON contacts(agent_id_1)",
@@ -134,6 +148,23 @@ def ensureMessageAttachmentsColumn (db : Database) : IO Unit := do
   if !hasAttachments then
     db.conn.execSqlDdl "ALTER TABLE messages ADD COLUMN attachments TEXT DEFAULT '[]'"
 
+/-- Ensure build slot uniqueness for active (unreleased) slots. -/
+def ensureBuildSlotUniqueIndex (db : Database) : IO Unit := do
+  let now ← Chronos.Timestamp.now
+  -- Release older duplicate active slots, keeping the newest id per (project_id, slot_name)
+  let _ ← db.conn.execSqlModify s!"
+    UPDATE build_slots
+    SET released_ts = {now.seconds}
+    WHERE released_ts IS NULL
+      AND id NOT IN (
+        SELECT MAX(id)
+        FROM build_slots
+        WHERE released_ts IS NULL
+        GROUP BY project_id, slot_name
+      )
+  "
+  db.conn.execSqlDdl "CREATE UNIQUE INDEX IF NOT EXISTS idx_build_slots_unreleased ON build_slots(project_id, slot_name) WHERE released_ts IS NULL"
+
 /-- Open a database connection and initialize schema -/
 def openFile (path : String) : IO Database := do
   let conn ← Quarry.Database.openFile path
@@ -146,6 +177,7 @@ def openFile (path : String) : IO Database := do
     conn.execSqlDdl stmt
   let db : Database := { conn, path }
   ensureMessageAttachmentsColumn db
+  ensureBuildSlotUniqueIndex db
   pure db
 
 /-- Open an in-memory database (for testing) -/
@@ -158,6 +190,7 @@ def openMemory : IO Database := do
     conn.execSqlDdl stmt
   let db : Database := { conn, path := ":memory:" }
   ensureMessageAttachmentsColumn db
+  ensureBuildSlotUniqueIndex db
   pure db
 
 /-- Close the database connection -/
@@ -840,6 +873,114 @@ where
       threadId
       senderName
     }
+
+-- =============================================================================
+-- Build slot queries
+-- =============================================================================
+
+/-- Insert a new build slot and return its ID -/
+def insertBuildSlot (db : Database) (projectId agentId : Nat) (slotName : String)
+    (createdTs expiresTs : Chronos.Timestamp) : IO Nat := do
+  let slotEsc := slotName.replace "'" "''"
+  let id ← db.insert s!"INSERT INTO build_slots (project_id, agent_id, slot_name, created_ts, expires_ts) VALUES ({projectId}, {agentId}, '{slotEsc}', {createdTs.seconds}, {expiresTs.seconds})"
+  pure id.toNat
+
+/-- Query a build slot by ID -/
+def queryBuildSlotById (db : Database) (id : Nat) : IO (Option AgentMail.BuildSlot) := do
+  let row ← db.queryOne s!"SELECT id, project_id, agent_id, slot_name, created_ts, expires_ts, released_ts FROM build_slots WHERE id = {id}"
+  pure (row.bind rowToBuildSlot)
+where
+  rowToBuildSlot (row : Quarry.Row) : Option AgentMail.BuildSlot := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let projectId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let agentId ← row.get? 2 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let slotName ← row.get? 3 >>= fun v => match v with | .text s => some s | _ => none
+    let createdTs ← row.get? 4 >>= fun v => match v with | .integer n => some n | _ => none
+    let expiresTs ← row.get? 5 >>= fun v => match v with | .integer n => some n | _ => none
+    let releasedTs : Option Int := row.get? 6 >>= fun v => match v with | .integer n => some n | _ => none
+    some {
+      id, projectId, agentId, slotName
+      createdTs := Chronos.Timestamp.fromSeconds createdTs
+      expiresTs := Chronos.Timestamp.fromSeconds expiresTs
+      releasedTs := releasedTs.map Chronos.Timestamp.fromSeconds
+    }
+
+/-- Query active (non-expired, non-released) build slot for a project and slot name -/
+def queryActiveBuildSlot (db : Database) (projectId : Nat) (slotName : String) (now : Chronos.Timestamp) : IO (Option AgentMail.BuildSlot) := do
+  let slotEsc := slotName.replace "'" "''"
+  let row ← db.queryOne s!"SELECT id, project_id, agent_id, slot_name, created_ts, expires_ts, released_ts FROM build_slots WHERE project_id = {projectId} AND slot_name = '{slotEsc}' AND expires_ts > {now.seconds} AND released_ts IS NULL ORDER BY created_ts DESC LIMIT 1"
+  pure (row.bind rowToBuildSlot)
+where
+  rowToBuildSlot (row : Quarry.Row) : Option AgentMail.BuildSlot := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let projectId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let agentId ← row.get? 2 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let slotName ← row.get? 3 >>= fun v => match v with | .text s => some s | _ => none
+    let createdTs ← row.get? 4 >>= fun v => match v with | .integer n => some n | _ => none
+    let expiresTs ← row.get? 5 >>= fun v => match v with | .integer n => some n | _ => none
+    let releasedTs : Option Int := row.get? 6 >>= fun v => match v with | .integer n => some n | _ => none
+    some {
+      id, projectId, agentId, slotName
+      createdTs := Chronos.Timestamp.fromSeconds createdTs
+      expiresTs := Chronos.Timestamp.fromSeconds expiresTs
+      releasedTs := releasedTs.map Chronos.Timestamp.fromSeconds
+    }
+
+/-- Query all build slots held by an agent -/
+def queryBuildSlotsByAgent (db : Database) (projectId agentId : Nat) : IO (Array AgentMail.BuildSlot) := do
+  let rows ← db.query s!"SELECT id, project_id, agent_id, slot_name, created_ts, expires_ts, released_ts FROM build_slots WHERE project_id = {projectId} AND agent_id = {agentId} ORDER BY created_ts DESC"
+  pure (rows.filterMap rowToBuildSlot)
+where
+  rowToBuildSlot (row : Quarry.Row) : Option AgentMail.BuildSlot := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let projectId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let agentId ← row.get? 2 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let slotName ← row.get? 3 >>= fun v => match v with | .text s => some s | _ => none
+    let createdTs ← row.get? 4 >>= fun v => match v with | .integer n => some n | _ => none
+    let expiresTs ← row.get? 5 >>= fun v => match v with | .integer n => some n | _ => none
+    let releasedTs : Option Int := row.get? 6 >>= fun v => match v with | .integer n => some n | _ => none
+    some {
+      id, projectId, agentId, slotName
+      createdTs := Chronos.Timestamp.fromSeconds createdTs
+      expiresTs := Chronos.Timestamp.fromSeconds expiresTs
+      releasedTs := releasedTs.map Chronos.Timestamp.fromSeconds
+    }
+
+/-- Query active build slots held by an agent -/
+def queryActiveBuildSlotsByAgent (db : Database) (projectId agentId : Nat) (now : Chronos.Timestamp) : IO (Array AgentMail.BuildSlot) := do
+  let rows ← db.query s!"SELECT id, project_id, agent_id, slot_name, created_ts, expires_ts, released_ts FROM build_slots WHERE project_id = {projectId} AND agent_id = {agentId} AND expires_ts > {now.seconds} AND released_ts IS NULL ORDER BY created_ts DESC"
+  pure (rows.filterMap rowToBuildSlot)
+where
+  rowToBuildSlot (row : Quarry.Row) : Option AgentMail.BuildSlot := do
+    let id ← row.get? 0 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let projectId ← row.get? 1 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let agentId ← row.get? 2 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let slotName ← row.get? 3 >>= fun v => match v with | .text s => some s | _ => none
+    let createdTs ← row.get? 4 >>= fun v => match v with | .integer n => some n | _ => none
+    let expiresTs ← row.get? 5 >>= fun v => match v with | .integer n => some n | _ => none
+    let releasedTs : Option Int := row.get? 6 >>= fun v => match v with | .integer n => some n | _ => none
+    some {
+      id, projectId, agentId, slotName
+      createdTs := Chronos.Timestamp.fromSeconds createdTs
+      expiresTs := Chronos.Timestamp.fromSeconds expiresTs
+      releasedTs := releasedTs.map Chronos.Timestamp.fromSeconds
+    }
+
+/-- Extend build slot TTL -/
+def updateBuildSlotExpires (db : Database) (id : Nat) (expiresTs : Chronos.Timestamp) : IO Bool := do
+  let affected ← db.modify s!"UPDATE build_slots SET expires_ts = {expiresTs.seconds} WHERE id = {id} AND released_ts IS NULL"
+  pure (affected > 0)
+
+/-- Mark build slot as released -/
+def updateBuildSlotReleased (db : Database) (id : Nat) (releasedTs : Chronos.Timestamp) : IO Bool := do
+  let affected ← db.modify s!"UPDATE build_slots SET released_ts = {releasedTs.seconds} WHERE id = {id} AND released_ts IS NULL"
+  pure (affected > 0)
+
+/-- Release expired build slots for a project + slot name. -/
+def releaseExpiredBuildSlots (db : Database) (projectId : Nat) (slotName : String) (now : Chronos.Timestamp) : IO Nat := do
+  let slotEsc := slotName.replace "'" "''"
+  let affected ← db.modify s!"UPDATE build_slots SET released_ts = {now.seconds} WHERE project_id = {projectId} AND slot_name = '{slotEsc}' AND released_ts IS NULL AND expires_ts <= {now.seconds}"
+  pure affected.toNat
 
 end Database
 
