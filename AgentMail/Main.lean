@@ -1,26 +1,18 @@
 /-
-  AgentMail.Main - Entry point for agent-mail server
+  AgentMail.Main - Entry point for agent-mail server and CLI
 -/
 import AgentMail.Config
 import AgentMail.Storage.Database
 import AgentMail.Server.Server
+import AgentMail.CLI.Commands
+import AgentMail.CLI.Handlers
 
 namespace AgentMail
 
-def main : IO Unit := do
-  -- Load configuration from environment
-  let cfg ← Config.fromEnv
-
-  -- Open database connection
-  let db ← Storage.Database.openFile cfg.databasePath
-
-  try
-    -- Run server (blocking)
-    Server.run cfg db
-  finally
-    -- Close database on shutdown or error
-    db.close
+def main (args : List String) : IO UInt32 := do
+  -- CLI mode when arguments provided, otherwise run HTTP server
+  CLI.Handlers.run args
 
 end AgentMail
 
-def main : IO Unit := AgentMail.main
+def main (args : List String) : IO UInt32 := AgentMail.main args
