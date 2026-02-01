@@ -34,7 +34,7 @@ namespace RateLimitState
 
 /-- Create new rate limit state -/
 def create : IO RateLimitState := do
-  let buckets ← IO.mkRef Std.HashMap.empty
+  let buckets ← IO.mkRef ({} : Std.HashMap String BucketEntry)
   pure { buckets }
 
 /-- Get client key from request (uses client IP or falls back to "default") -/
@@ -76,7 +76,7 @@ def consumeToken (state : RateLimitState) (key : String) (perMinute burst : Nat)
     -- Calculate tokens added since last request
     let elapsed := now - lastTs
     let addedTokens := Float.ofNat elapsed * rate
-    let newTokens := Float.min (Float.ofNat burst) (tokens + addedTokens)
+    let newTokens := min (Float.ofNat burst) (tokens + addedTokens)
 
     if newTokens >= 1.0 then
       -- Allow request and consume a token
@@ -92,7 +92,7 @@ def cleanup (state : RateLimitState) : IO Unit := do
   let now ← IO.monoMsNow
   let staleThreshold := now - 300000  -- 5 minutes in ms
   state.buckets.modify fun buckets =>
-    buckets.fold (init := Std.HashMap.empty) fun acc key (tokens, lastTs) =>
+    buckets.fold (init := ({} : Std.HashMap String BucketEntry)) fun acc key (tokens, lastTs) =>
       if lastTs > staleThreshold then
         acc.insert key (tokens, lastTs)
       else

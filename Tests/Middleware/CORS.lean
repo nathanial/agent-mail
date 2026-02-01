@@ -2,23 +2,26 @@
   Tests.Middleware.CORS - Tests for CORS middleware
 -/
 import Crucible
+import Staple
 import AgentMail.Middleware.CORS
 import Citadel
 
 open Crucible
 open Citadel
 open AgentMail.Middleware.CORS
+open Staple (String.containsSubstr)
 
 testSuite "Middleware.CORS"
 
 /-- Create a mock request with optional Origin header -/
 private def mockRequest (method : Method := .GET) (origin : Option String := none) : ServerRequest :=
   let headers := match origin with
-    | some o => Headers.empty.add "Origin" o
-    | none => Headers.empty
+    | some o => Herald.Core.Headers.add Herald.Core.Headers.empty "Origin" o
+    | none => Herald.Core.Headers.empty
   { request := {
       method := method
       path := "/rpc"
+      version := .http11
       headers := headers
       body := ByteArray.empty
     }

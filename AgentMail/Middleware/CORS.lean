@@ -65,18 +65,15 @@ private def addCorsHeaders (config : CorsConfig) (origin : String) (resp : Respo
 
 /-- Create preflight response with CORS headers -/
 private def preflightResponse (config : CorsConfig) (origin : String) : Response :=
-  let resp := ResponseBuilder.withStatus StatusCode.noContent
-    |>.withHeader "Access-Control-Allow-Origin" origin
-    |>.withHeader "Access-Control-Allow-Methods" (String.intercalate ", " config.allowMethods)
-    |>.withHeader "Access-Control-Allow-Headers" (String.intercalate ", " config.allowHeaders)
-    |>.withHeader "Access-Control-Max-Age" (toString config.maxAge)
+  let resp := addHeader Response.noContent "Access-Control-Allow-Origin" origin
+  let resp := addHeader resp "Access-Control-Allow-Methods" (String.intercalate ", " config.allowMethods)
+  let resp := addHeader resp "Access-Control-Allow-Headers" (String.intercalate ", " config.allowHeaders)
+  let resp := addHeader resp "Access-Control-Max-Age" (toString config.maxAge)
 
-  let resp := if config.allowCredentials then
-    resp.withHeader "Access-Control-Allow-Credentials" "true"
+  if config.allowCredentials then
+    addHeader resp "Access-Control-Allow-Credentials" "true"
   else
     resp
-
-  resp.build
 
 /-- CORS middleware.
 

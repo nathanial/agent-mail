@@ -2,6 +2,7 @@
   AgentMail.Resources.Mail - Mail-related MCP resources
 -/
 import Citadel
+import AgentMail.Config
 import AgentMail.Storage.Database
 import AgentMail.Resources.Core
 import AgentMail.Tools.Identity
@@ -46,7 +47,7 @@ private def outboxEntryToJson (entry : Storage.Database.OutboxEntry) (includeBod
   Lean.Json.mkObj withBody
 
 /-- Handle GET /resource/message/:id -/
-def handleMessage (db : Storage.Database) (req : ServerRequest) : IO Response := do
+def handleMessage (db : Storage.Database) (cfg : AgentMail.Config) (req : ServerRequest) : IO Response := do
   let idStr ← match req.param "id" with
     | some s => pure s
     | none => return Core.resourceBadRequest "missing id parameter"
@@ -85,10 +86,10 @@ def handleMessage (db : Storage.Database) (req : ServerRequest) : IO Response :=
     ("thread_id", match message.threadId with | some t => Lean.Json.str t | none => Lean.Json.null),
     ("created_ts", Lean.Json.num message.createdTs.seconds)
   ]
-  pure (Core.resourceOk result)
+  Core.resourceOkFormatted cfg req "message" result
 
 /-- Handle GET /resource/thread/:id -/
-def handleThread (db : Storage.Database) (req : ServerRequest) : IO Response := do
+def handleThread (db : Storage.Database) (cfg : AgentMail.Config) (req : ServerRequest) : IO Response := do
   let threadId ← match req.param "id" with
     | some s => pure s
     | none => return Core.resourceBadRequest "missing id parameter"
@@ -122,10 +123,10 @@ def handleThread (db : Storage.Database) (req : ServerRequest) : IO Response := 
     ("messages", Lean.Json.arr messagesJson),
     ("count", Lean.Json.num messages.size)
   ]
-  pure (Core.resourceOk result)
+  Core.resourceOkFormatted cfg req "thread" result
 
 /-- Handle GET /resource/inbox/:agent -/
-def handleInbox (db : Storage.Database) (req : ServerRequest) : IO Response := do
+def handleInbox (db : Storage.Database) (cfg : AgentMail.Config) (req : ServerRequest) : IO Response := do
   let agentName ← match req.param "agent" with
     | some s => pure s
     | none => return Core.resourceBadRequest "missing agent parameter"
@@ -156,10 +157,10 @@ def handleInbox (db : Storage.Database) (req : ServerRequest) : IO Response := d
     ("messages", Lean.Json.arr entriesJson),
     ("count", Lean.Json.num entries.size)
   ]
-  pure (Core.resourceOk result)
+  Core.resourceOkFormatted cfg req "inbox" result
 
 /-- Handle GET /resource/outbox/:agent -/
-def handleOutbox (db : Storage.Database) (req : ServerRequest) : IO Response := do
+def handleOutbox (db : Storage.Database) (cfg : AgentMail.Config) (req : ServerRequest) : IO Response := do
   let agentName ← match req.param "agent" with
     | some s => pure s
     | none => return Core.resourceBadRequest "missing agent parameter"
@@ -188,10 +189,10 @@ def handleOutbox (db : Storage.Database) (req : ServerRequest) : IO Response := 
     ("messages", Lean.Json.arr entriesJson),
     ("count", Lean.Json.num entries.size)
   ]
-  pure (Core.resourceOk result)
+  Core.resourceOkFormatted cfg req "outbox" result
 
 /-- Handle GET /resource/mailbox/:agent -/
-def handleMailbox (db : Storage.Database) (req : ServerRequest) : IO Response := do
+def handleMailbox (db : Storage.Database) (cfg : AgentMail.Config) (req : ServerRequest) : IO Response := do
   let agentName ← match req.param "agent" with
     | some s => pure s
     | none => return Core.resourceBadRequest "missing agent parameter"
@@ -232,6 +233,6 @@ def handleMailbox (db : Storage.Database) (req : ServerRequest) : IO Response :=
       ("count", Lean.Json.num outbox.size)
     ])
   ]
-  pure (Core.resourceOk result)
+  Core.resourceOkFormatted cfg req "mailbox" result
 
 end AgentMail.Resources.Mail

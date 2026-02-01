@@ -2,6 +2,7 @@
   AgentMail.Resources.Discovery - Discovery-related MCP resources
 -/
 import Citadel
+import AgentMail.Config
 import AgentMail.Storage.Database
 import AgentMail.Resources.Core
 import AgentMail.Tools.Identity
@@ -11,7 +12,7 @@ open Citadel
 namespace AgentMail.Resources.Discovery
 
 /-- Handle GET /resource/projects -/
-def handleProjects (db : Storage.Database) (_req : ServerRequest) : IO Response := do
+def handleProjects (db : Storage.Database) (cfg : AgentMail.Config) (req : ServerRequest) : IO Response := do
   let projects ← db.queryAllProjects
   let projectsJson := projects.map fun p => Lean.Json.mkObj [
     ("id", Lean.Json.num p.id),
@@ -23,10 +24,10 @@ def handleProjects (db : Storage.Database) (_req : ServerRequest) : IO Response 
     ("projects", Lean.Json.arr projectsJson),
     ("count", Lean.Json.num projects.size)
   ]
-  pure (Core.resourceOk result)
+  Core.resourceOkFormatted cfg req "projects" result
 
 /-- Handle GET /resource/project/:slug -/
-def handleProject (db : Storage.Database) (req : ServerRequest) : IO Response := do
+def handleProject (db : Storage.Database) (cfg : AgentMail.Config) (req : ServerRequest) : IO Response := do
   let slug ← match req.param "slug" with
     | some s => pure s
     | none => return Core.resourceBadRequest "missing slug parameter"
@@ -59,10 +60,10 @@ def handleProject (db : Storage.Database) (req : ServerRequest) : IO Response :=
     ("agents", Lean.Json.arr agentJson),
     ("agent_count", Lean.Json.num agents.size)
   ]
-  pure (Core.resourceOk result)
+  Core.resourceOkFormatted cfg req "project" result
 
 /-- Handle GET /resource/agents/:project_key -/
-def handleAgents (db : Storage.Database) (req : ServerRequest) : IO Response := do
+def handleAgents (db : Storage.Database) (cfg : AgentMail.Config) (req : ServerRequest) : IO Response := do
   let projectKey ← match req.param "project_key" with
     | some k => pure k
     | none => return Core.resourceBadRequest "missing project_key parameter"
@@ -89,10 +90,10 @@ def handleAgents (db : Storage.Database) (req : ServerRequest) : IO Response := 
     ("agents", Lean.Json.arr agentJson),
     ("count", Lean.Json.num agents.size)
   ]
-  pure (Core.resourceOk result)
+  Core.resourceOkFormatted cfg req "agents" result
 
 /-- Handle GET /resource/identity/:project -/
-def handleIdentity (db : Storage.Database) (req : ServerRequest) : IO Response := do
+def handleIdentity (db : Storage.Database) (cfg : AgentMail.Config) (req : ServerRequest) : IO Response := do
   let projectKey ← match req.param "project" with
     | some k => pure k
     | none => return Core.resourceBadRequest "missing project parameter"
@@ -114,10 +115,10 @@ def handleIdentity (db : Storage.Database) (req : ServerRequest) : IO Response :
     ("agent_names", Lean.toJson agentNames),
     ("agent_count", Lean.Json.num agents.size)
   ]
-  pure (Core.resourceOk result)
+  Core.resourceOkFormatted cfg req "identity" result
 
 /-- Handle GET /resource/product/:key -/
-def handleProduct (db : Storage.Database) (req : ServerRequest) : IO Response := do
+def handleProduct (db : Storage.Database) (cfg : AgentMail.Config) (req : ServerRequest) : IO Response := do
   let productKey ← match req.param "key" with
     | some k => pure k
     | none => return Core.resourceBadRequest "missing key parameter"
@@ -141,6 +142,6 @@ def handleProduct (db : Storage.Database) (req : ServerRequest) : IO Response :=
     ("linked_projects", Lean.Json.arr projectsJson),
     ("project_count", Lean.Json.num linkedProjects.size)
   ]
-  pure (Core.resourceOk result)
+  Core.resourceOkFormatted cfg req "product" result
 
 end AgentMail.Resources.Discovery

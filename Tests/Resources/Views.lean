@@ -44,27 +44,30 @@ def mkRequest (pathParams : List (String × String)) (queryParams : List (String
 
 test "handleUrgentUnread returns 404 for missing project" := do
   let db ← Storage.Database.openMemory
+  let cfg := Config.default
   let req := mkRequest [("agent", "Agent1")] [("project", "/missing")]
-  let resp ← Resources.Views.handleUrgentUnread db req
+  let resp ← Resources.Views.handleUrgentUnread db cfg req
   resp.status.code ≡ (404 : UInt16)
   db.close
 
 test "handleUrgentUnread returns 404 for missing agent" := do
   let db ← Storage.Database.openMemory
+  let cfg := Config.default
   let now := Chronos.Timestamp.fromSeconds 1700000000
   let _ ← db.insertProject "p1" "/my/project" now
   let req := mkRequest [("agent", "MissingAgent")] [("project", "/my/project")]
-  let resp ← Resources.Views.handleUrgentUnread db req
+  let resp ← Resources.Views.handleUrgentUnread db cfg req
   resp.status.code ≡ (404 : UInt16)
   db.close
 
 test "handleUrgentUnread returns empty list" := do
   let db ← Storage.Database.openMemory
+  let cfg := Config.default
   let now := Chronos.Timestamp.fromSeconds 1700000000
   let projectId ← db.insertProject "p1" "/my/project" now
   let _ ← db.insertAgent (mkAgent projectId "Agent1" now)
   let req := mkRequest [("agent", "Agent1")] [("project", "/my/project")]
-  let resp ← Resources.Views.handleUrgentUnread db req
+  let resp ← Resources.Views.handleUrgentUnread db cfg req
   resp.status.code ≡ (200 : UInt16)
   let json ← parseJsonResponse resp
   match json.getObjValAs? String "view" with
@@ -77,11 +80,12 @@ test "handleUrgentUnread returns empty list" := do
 
 test "handleAckRequired returns empty list" := do
   let db ← Storage.Database.openMemory
+  let cfg := Config.default
   let now := Chronos.Timestamp.fromSeconds 1700000000
   let projectId ← db.insertProject "p1" "/my/project" now
   let _ ← db.insertAgent (mkAgent projectId "Agent1" now)
   let req := mkRequest [("agent", "Agent1")] [("project", "/my/project")]
-  let resp ← Resources.Views.handleAckRequired db req
+  let resp ← Resources.Views.handleAckRequired db cfg req
   resp.status.code ≡ (200 : UInt16)
   let json ← parseJsonResponse resp
   match json.getObjValAs? String "view" with
@@ -91,11 +95,12 @@ test "handleAckRequired returns empty list" := do
 
 test "handleAcksStale returns empty list" := do
   let db ← Storage.Database.openMemory
+  let cfg := Config.default
   let now := Chronos.Timestamp.fromSeconds 1700000000
   let projectId ← db.insertProject "p1" "/my/project" now
   let _ ← db.insertAgent (mkAgent projectId "Agent1" now)
   let req := mkRequest [("agent", "Agent1")] [("project", "/my/project")]
-  let resp ← Resources.Views.handleAcksStale db req
+  let resp ← Resources.Views.handleAcksStale db cfg req
   resp.status.code ≡ (200 : UInt16)
   let json ← parseJsonResponse resp
   match json.getObjValAs? String "view" with
@@ -105,11 +110,12 @@ test "handleAcksStale returns empty list" := do
 
 test "handleAckOverdue returns empty list" := do
   let db ← Storage.Database.openMemory
+  let cfg := Config.default
   let now := Chronos.Timestamp.fromSeconds 1700000000
   let projectId ← db.insertProject "p1" "/my/project" now
   let _ ← db.insertAgent (mkAgent projectId "Agent1" now)
   let req := mkRequest [("agent", "Agent1")] [("project", "/my/project")]
-  let resp ← Resources.Views.handleAckOverdue db req
+  let resp ← Resources.Views.handleAckOverdue db cfg req
   resp.status.code ≡ (200 : UInt16)
   let json ← parseJsonResponse resp
   match json.getObjValAs? String "view" with

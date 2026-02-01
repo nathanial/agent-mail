@@ -16,7 +16,8 @@ private def mockRequest (path : String := "/rpc") (host : String := "testclient"
   { request := {
       method := .POST
       path := path
-      headers := Headers.empty.add "Host" host
+      version := .http11
+      headers := Herald.Core.Headers.add Herald.Core.Headers.empty "Host" host
       body := ByteArray.empty
     }
     params := []

@@ -4,6 +4,7 @@
 import Chronos
 import Citadel
 import AgentMail.Config
+import AgentMail.Notifications
 import AgentMail.Protocol.JsonRpc
 import AgentMail.Storage.Database
 import AgentMail.Storage.Archive
@@ -187,6 +188,15 @@ def handleSendMessage (db : Storage.Database) (cfg : Config) (req : JsonRpc.Requ
       ackedAt := none
     }
     db.insertMessageRecipient recipient
+
+  -- Emit notification signals for to/cc recipients (best-effort)
+  let priority := some importance.toString
+  for name in toNames do
+    Notifications.notifyNewMessage cfg.notifications project.slug name
+      (toString messageId) (threadIdOpt.getD "") sender.name priority
+  for name in ccNames do
+    Notifications.notifyNewMessage cfg.notifications project.slug name
+      (toString messageId) (threadIdOpt.getD "") sender.name priority
 
   -- Write archive artifacts
   let archive ← Storage.ensureProjectArchive cfg project.slug
@@ -420,6 +430,15 @@ def handleReplyMessage (db : Storage.Database) (cfg : Config) (req : JsonRpc.Req
     }
     db.insertMessageRecipient recipient
 
+  -- Emit notification signals for to/cc recipients (best-effort)
+  let priority := some importance.toString
+  for name in toNames do
+    Notifications.notifyNewMessage cfg.notifications project.slug name
+      (toString messageId) threadId sender.name priority
+  for name in ccNames do
+    Notifications.notifyNewMessage cfg.notifications project.slug name
+      (toString messageId) threadId sender.name priority
+
   -- Write archive artifacts
   let archive ← Storage.ensureProjectArchive cfg project.slug
   let createdIso ← Storage.timestampToIso now
@@ -482,7 +501,7 @@ def handleReplyMessage (db : Storage.Database) (cfg : Config) (req : JsonRpc.Req
   pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
 
 /-- Handle fetch_inbox request -/
-def handleFetchInbox (db : Storage.Database) (req : JsonRpc.Request) : IO Response := do
+def handleFetchInbox (db : Storage.Database) (cfg : Config) (req : JsonRpc.Request) : IO Response := do
   let params := req.params.getD Lean.Json.null
 
   -- Extract required params
@@ -539,6 +558,9 @@ def handleFetchInbox (db : Storage.Database) (req : JsonRpc.Request) : IO Respon
   -- Query inbox
   let entries ← db.queryInbox project.id agent.id limit urgentOnly sinceTs
 
+  -- Clear notification signal (best-effort)
+  Notifications.clearSignal cfg.notifications project.slug agent.name
+
   -- Convert entries to JSON
   let messages := entries.map fun entry =>
     let baseFields : List (String × Lean.Json) := [
@@ -561,7 +583,7 @@ def handleFetchInbox (db : Storage.Database) (req : JsonRpc.Request) : IO Respon
   pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
 
 /-- Handle mark_message_read request -/
-def handleMarkRead (db : Storage.Database) (req : JsonRpc.Request) : IO Response := do
+def handleMarkRead (db : Storage.Database) (_cfg : Config) (req : JsonRpc.Request) : IO Response := do
   let params := req.params.getD Lean.Json.null
 
   -- Extract required params
@@ -634,7 +656,7 @@ def handleMarkRead (db : Storage.Database) (req : JsonRpc.Request) : IO Response
       pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
 
 /-- Handle acknowledge_message request -/
-def handleAcknowledge (db : Storage.Database) (req : JsonRpc.Request) : IO Response := do
+def handleAcknowledge (db : Storage.Database) (_cfg : Config) (req : JsonRpc.Request) : IO Response := do
   let params := req.params.getD Lean.Json.null
 
   -- Extract required params

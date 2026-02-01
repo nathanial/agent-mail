@@ -14,11 +14,16 @@ testSuite "Middleware.Auth"
 /-- Create a mock request with optional Authorization header -/
 private def mockRequest (path : String := "/rpc") (authHeader : Option String := none) (host : String := "example.com") : ServerRequest :=
   let headers := match authHeader with
-    | some auth => Headers.empty.add "Authorization" auth |>.add "Host" host
-    | none => Headers.empty.add "Host" host
+    | some auth =>
+        Herald.Core.Headers.add
+          (Herald.Core.Headers.add Herald.Core.Headers.empty "Authorization" auth)
+          "Host" host
+    | none =>
+        Herald.Core.Headers.add Herald.Core.Headers.empty "Host" host
   { request := {
       method := .POST
       path := path
+      version := .http11
       headers := headers
       body := ByteArray.empty
     }
@@ -58,7 +63,8 @@ test "Skips auth for OPTIONS requests (CORS preflight)" := do
     request := {
       method := .OPTIONS
       path := "/rpc"
-      headers := Headers.empty.add "Host" "example.com"
+      version := .http11
+      headers := Herald.Core.Headers.add Herald.Core.Headers.empty "Host" "example.com"
       body := ByteArray.empty
     }
     params := []

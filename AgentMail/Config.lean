@@ -16,6 +16,30 @@ structure HttpConfig where
   allowLocalhostUnauthenticated : Bool := true
   /-- Rate limiting configuration -/
   rateLimit : Middleware.RateLimit.RateLimitConfig := {}
+  /-- Enable JWT authentication -/
+  jwtEnabled : Bool := false
+  /-- Allowed JWT algorithms (e.g., HS256) -/
+  jwtAlgorithms : List String := ["HS256"]
+  /-- JWT shared secret for HS256 (optional) -/
+  jwtSecret : Option String := none
+  /-- JWT JWKS URL for key discovery (optional) -/
+  jwtJwksUrl : Option String := none
+  /-- JWT audience claim (optional) -/
+  jwtAudience : Option String := none
+  /-- JWT issuer claim (optional) -/
+  jwtIssuer : Option String := none
+  /-- JWT role claim name -/
+  jwtRoleClaim : String := "roles"
+  /-- Enable RBAC enforcement -/
+  rbacEnabled : Bool := true
+  /-- Roles allowed to read resources and readonly tools -/
+  rbacReaderRoles : List String := []
+  /-- Roles allowed to call write tools -/
+  rbacWriterRoles : List String := []
+  /-- Default role when no roles are present -/
+  rbacDefaultRole : String := "tools"
+  /-- Tools that are allowed for read-only roles -/
+  rbacReadonlyTools : List String := []
   deriving Repr, Inhabited
 
 namespace HttpConfig
@@ -44,6 +68,14 @@ structure Config where
   toolFilter : ToolFilter.ToolFilterConfig := {}
   /-- Notifications configuration -/
   notifications : Notifications.NotificationConfig := {}
+  /-- Default output format ("json" or "toon") -/
+  outputFormatDefault : String := ""
+  /-- Default toon output format ("json" or "toon") -/
+  toonDefaultFormat : String := ""
+  /-- Whether toon encoder stats are enabled -/
+  toonStatsEnabled : Bool := false
+  /-- Toon encoder binary (defaults to "tru") -/
+  toonBin : String := ""
   /-- Log level (DEBUG, INFO, WARN, ERROR) -/
   logLevel : String := "INFO"
   /-- Whether request logging is enabled -/
@@ -95,6 +127,18 @@ def fromEnv : IO Config := do
   let httpRateLimitResourcesPerMin ← IO.getEnv "HTTP_RATE_LIMIT_RESOURCES_PER_MINUTE"
   let httpRateLimitToolsBurst ← IO.getEnv "HTTP_RATE_LIMIT_TOOLS_BURST"
   let httpRateLimitResourcesBurst ← IO.getEnv "HTTP_RATE_LIMIT_RESOURCES_BURST"
+  let httpJwtEnabled ← IO.getEnv "HTTP_JWT_ENABLED"
+  let httpJwtAlgorithms ← IO.getEnv "HTTP_JWT_ALGORITHMS"
+  let httpJwtSecret ← IO.getEnv "HTTP_JWT_SECRET"
+  let httpJwtJwksUrl ← IO.getEnv "HTTP_JWT_JWKS_URL"
+  let httpJwtAudience ← IO.getEnv "HTTP_JWT_AUDIENCE"
+  let httpJwtIssuer ← IO.getEnv "HTTP_JWT_ISSUER"
+  let httpJwtRoleClaim ← IO.getEnv "HTTP_JWT_ROLE_CLAIM"
+  let httpRbacEnabled ← IO.getEnv "HTTP_RBAC_ENABLED"
+  let httpRbacReaderRoles ← IO.getEnv "HTTP_RBAC_READER_ROLES"
+  let httpRbacWriterRoles ← IO.getEnv "HTTP_RBAC_WRITER_ROLES"
+  let httpRbacDefaultRole ← IO.getEnv "HTTP_RBAC_DEFAULT_ROLE"
+  let httpRbacReadonlyTools ← IO.getEnv "HTTP_RBAC_READONLY_TOOLS"
 
   -- CORS settings
   let corsEnabled ← IO.getEnv "HTTP_CORS_ENABLED"
@@ -120,6 +164,13 @@ def fromEnv : IO Config := do
   let logLevel ← IO.getEnv "LOG_LEVEL"
   let requestLogEnabled ← IO.getEnv "HTTP_REQUEST_LOG_ENABLED"
 
+  -- Output formatting settings
+  let outputFormatDefault ← IO.getEnv "MCP_AGENT_MAIL_OUTPUT_FORMAT"
+  let toonDefaultFormat ← IO.getEnv "TOON_DEFAULT_FORMAT"
+  let toonStatsEnabled ← IO.getEnv "TOON_STATS"
+  let toonTruBin ← IO.getEnv "TOON_TRU_BIN"
+  let toonBin ← IO.getEnv "TOON_BIN"
+
   -- Parse port
   let portVal : UInt16 := match port with
     | some p => match p.toNat? with
@@ -141,6 +192,18 @@ def fromEnv : IO Config := do
     bearerToken := httpBearerToken
     allowLocalhostUnauthenticated := parseBool httpAllowLocalhost true
     rateLimit := rateLimitConfig
+    jwtEnabled := parseBool httpJwtEnabled
+    jwtAlgorithms := if httpJwtAlgorithms.isSome then parseList httpJwtAlgorithms else ["HS256"]
+    jwtSecret := httpJwtSecret
+    jwtJwksUrl := httpJwtJwksUrl
+    jwtAudience := httpJwtAudience
+    jwtIssuer := httpJwtIssuer
+    jwtRoleClaim := httpJwtRoleClaim.getD "roles"
+    rbacEnabled := parseBool httpRbacEnabled true
+    rbacReaderRoles := parseList httpRbacReaderRoles
+    rbacWriterRoles := parseList httpRbacWriterRoles
+    rbacDefaultRole := httpRbacDefaultRole.getD "tools"
+    rbacReadonlyTools := parseList httpRbacReadonlyTools
   }
 
   -- Build CORS config
@@ -186,6 +249,10 @@ def fromEnv : IO Config := do
     cors := corsConfig
     toolFilter := toolFilterConfig
     notifications := notificationsConfig
+    outputFormatDefault := outputFormatDefault.getD ""
+    toonDefaultFormat := toonDefaultFormat.getD ""
+    toonStatsEnabled := parseBool toonStatsEnabled
+    toonBin := (toonTruBin.getD "" |> fun v => if v.isEmpty then toonBin.getD "" else v)
     logLevel := logLevel.getD "INFO"
     requestLogEnabled := parseBool requestLogEnabled
   }
@@ -202,7 +269,8 @@ def display (cfg : Config) : String :=
   s!"database: {cfg.databasePath}, storage: {cfg.storageRoot}, token: {tokenDisplay}, " ++
   s!"http.bearerToken: {httpTokenDisplay}, http.rateLimit.enabled: {cfg.http.rateLimit.enabled}, " ++
   s!"cors.enabled: {cfg.cors.enabled}, toolFilter.enabled: {cfg.toolFilter.enabled}, " ++
-  s!"notifications.enabled: {cfg.notifications.enabled}, logLevel: {cfg.logLevel} }"
+  s!"notifications.enabled: {cfg.notifications.enabled}, outputFormat: {cfg.outputFormatDefault}, " ++
+  s!"logLevel: {cfg.logLevel} }"
 
 end Config
 

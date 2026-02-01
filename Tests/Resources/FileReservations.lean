@@ -41,17 +41,19 @@ def mkRequest (pathParams : List (String × String)) : ServerRequest := {
 
 test "handleFileReservations returns 404 for missing project" := do
   let db ← Storage.Database.openMemory
+  let cfg := Config.default
   let req := mkRequest [("slug", "nonexistent")]
-  let resp ← Resources.FileReservations.handleFileReservations db req
+  let resp ← Resources.FileReservations.handleFileReservations db cfg req
   resp.status.code ≡ (404 : UInt16)
   db.close
 
 test "handleFileReservations returns empty list" := do
   let db ← Storage.Database.openMemory
+  let cfg := Config.default
   let now := Chronos.Timestamp.fromSeconds 1700000000
   let _ ← db.insertProject "p1" "/my/project" now
   let req := mkRequest [("slug", "p1")]
-  let resp ← Resources.FileReservations.handleFileReservations db req
+  let resp ← Resources.FileReservations.handleFileReservations db cfg req
   resp.status.code ≡ (200 : UInt16)
   let json ← parseJsonResponse resp
   match json.getObjVal? "count" with
@@ -61,13 +63,14 @@ test "handleFileReservations returns empty list" := do
 
 test "handleFileReservations returns active reservations" := do
   let db ← Storage.Database.openMemory
+  let cfg := Config.default
   let now := Chronos.Timestamp.fromSeconds 1700000000
   let expires := Chronos.Timestamp.fromSeconds 2000000000  -- Far future
   let projectId ← db.insertProject "p1" "/my/project" now
   let agentId ← db.insertAgent (mkAgent projectId "Agent1" now)
   let _ ← db.insertFileReservation projectId agentId "src/*.lean" true "Testing" now expires
   let req := mkRequest [("slug", "p1")]
-  let resp ← Resources.FileReservations.handleFileReservations db req
+  let resp ← Resources.FileReservations.handleFileReservations db cfg req
   resp.status.code ≡ (200 : UInt16)
   let json ← parseJsonResponse resp
   match json.getObjVal? "count" with
@@ -89,13 +92,14 @@ test "handleFileReservations returns active reservations" := do
 
 test "handleFileReservations excludes expired reservations" := do
   let db ← Storage.Database.openMemory
+  let cfg := Config.default
   let now := Chronos.Timestamp.fromSeconds 1700000000
   let expired := Chronos.Timestamp.fromSeconds 1600000000  -- Past
   let projectId ← db.insertProject "p1" "/my/project" now
   let agentId ← db.insertAgent (mkAgent projectId "Agent1" now)
   let _ ← db.insertFileReservation projectId agentId "src/*.lean" true "Testing" now expired
   let req := mkRequest [("slug", "p1")]
-  let resp ← Resources.FileReservations.handleFileReservations db req
+  let resp ← Resources.FileReservations.handleFileReservations db cfg req
   resp.status.code ≡ (200 : UInt16)
   let json ← parseJsonResponse resp
   match json.getObjVal? "count" with

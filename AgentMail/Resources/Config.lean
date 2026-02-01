@@ -10,7 +10,7 @@ open Citadel
 namespace AgentMail.Resources.Config
 
 /-- Handle GET /resource/config/environment -/
-def handleEnvironment (cfg : AgentMail.Config) (_req : ServerRequest) : IO Response := do
+def handleEnvironment (cfg : AgentMail.Config) (req : ServerRequest) : IO Response := do
   let result := Lean.Json.mkObj [
     ("environment", Lean.Json.str cfg.environment),
     ("host", Lean.Json.str cfg.host),
@@ -20,6 +20,6 @@ def handleEnvironment (cfg : AgentMail.Config) (_req : ServerRequest) : IO Respo
     ("worktrees_enabled", Lean.Json.bool cfg.worktreesEnabled),
     ("auth_configured", Lean.Json.bool cfg.authToken.isSome)
   ]
-  pure (Core.resourceOk result)
+  Core.resourceOkFormatted cfg req "config.environment" result
 
 end AgentMail.Resources.Config

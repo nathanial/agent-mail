@@ -6,6 +6,8 @@ import AgentMail.Config
 import AgentMail.Middleware
 import AgentMail.Protocol.JsonRpc
 import AgentMail.Storage.Database
+import AgentMail.ToolFilter
+import AgentMail.OutputFormat
 import AgentMail.Tools.Identity
 import AgentMail.Tools.Messaging
 import AgentMail.Tools.Contacts
@@ -42,21 +44,36 @@ def handleRpc (db : Storage.Database) (cfg : Config) (req : ServerRequest) : IO 
       let resp := JsonRpc.Response.failure none err
       return Response.json (Lean.Json.compress (Lean.toJson resp))
     | Except.ok (rpcReq : JsonRpc.Request) =>
+      -- Optional tool filtering (hide tools when not allowed)
+      if cfg.toolFilter.enabled && !ToolFilter.isToolAllowed cfg.toolFilter rpcReq.method then
+        if rpcReq.isNotification then
+          return Response.noContent
+        let err := JsonRpc.Error.methodNotFound rpcReq.method
+        let resp := JsonRpc.Response.failure rpcReq.id err
+        return Response.json (Lean.Json.compress (Lean.toJson resp))
+
+      let formatValue := match rpcReq.params with
+        | some params =>
+          match params.getObjValAs? String "format" with
+          | Except.ok v => some v
+          | Except.error _ => none
+        | none => none
+
       -- Notifications must not return a response
       if rpcReq.isNotification then
         pure Response.noContent
       else
         -- Route to appropriate handler
-        match rpcReq.method with
+        let resp ← match rpcReq.method with
         | "health_check" => Tools.Identity.handleHealthCheck db cfg rpcReq
         | "ensure_project" => Tools.Identity.handleEnsureProject db cfg rpcReq
         | "register_agent" => Tools.Identity.handleRegisterAgent db cfg rpcReq
         | "whois" => Tools.Identity.handleWhois db cfg rpcReq
         | "send_message" => Tools.Messaging.handleSendMessage db cfg rpcReq
         | "reply_message" => Tools.Messaging.handleReplyMessage db cfg rpcReq
-        | "fetch_inbox" => Tools.Messaging.handleFetchInbox db rpcReq
-        | "mark_message_read" => Tools.Messaging.handleMarkRead db rpcReq
-        | "acknowledge_message" => Tools.Messaging.handleAcknowledge db rpcReq
+        | "fetch_inbox" => Tools.Messaging.handleFetchInbox db cfg rpcReq
+        | "mark_message_read" => Tools.Messaging.handleMarkRead db cfg rpcReq
+        | "acknowledge_message" => Tools.Messaging.handleAcknowledge db cfg rpcReq
         | "request_contact" => Tools.Contacts.handleRequestContact db rpcReq
         | "respond_contact" => Tools.Contacts.handleRespondContact db rpcReq
         | "list_contacts" => Tools.Contacts.handleListContacts db rpcReq
@@ -86,6 +103,28 @@ def handleRpc (db : Storage.Database) (cfg : Config) (req : ServerRequest) : IO 
           let resp := JsonRpc.Response.failure rpcReq.id err
           pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
 
+        -- Apply output formatting to successful tool responses (if requested)
+        if formatValue.isNone && cfg.outputFormatDefault.isEmpty && cfg.toonDefaultFormat.isEmpty then
+          return resp
+        let bodyText := String.fromUTF8! resp.body
+        match Lean.Json.parse bodyText with
+        | Except.error _ => pure resp
+        | Except.ok json =>
+          match (Lean.FromJson.fromJson? json : Except String JsonRpc.Response) with
+          | Except.error _ => pure resp
+          | Except.ok rpcResp =>
+            match rpcResp.result with
+            | none => pure resp
+            | some result =>
+              match ← OutputFormat.apply result cfg formatValue rpcReq.method with
+              | .error e =>
+                let err := JsonRpc.Error.invalidParams (some e)
+                let errResp := JsonRpc.Response.failure rpcReq.id err
+                pure (Response.json (Lean.Json.compress (Lean.toJson errResp)))
+              | .ok formatted =>
+                let newResp : JsonRpc.Response := { rpcResp with result := some formatted }
+                pure (Response.json (Lean.Json.compress (Lean.toJson newResp)))
+
 /-- Handle health check requests -/
 def handleHealth (_req : ServerRequest) : IO Response := do
   let json := Lean.Json.mkObj [
@@ -101,24 +140,24 @@ def create (cfg : Config) (db : Storage.Database) (rateLimitState : Middleware.R
     |>.post "/rpc" (handleRpc db cfg)
     |>.get "/health" handleHealth
     -- Discovery resources
-    |>.get "/resource/projects" (Resources.Discovery.handleProjects db)
-    |>.get "/resource/project/:slug" (Resources.Discovery.handleProject db)
-    |>.get "/resource/agents/:project_key" (Resources.Discovery.handleAgents db)
-    |>.get "/resource/identity/:project" (Resources.Discovery.handleIdentity db)
-    |>.get "/resource/product/:key" (Resources.Discovery.handleProduct db)
+    |>.get "/resource/projects" (Resources.Discovery.handleProjects db cfg)
+    |>.get "/resource/project/:slug" (Resources.Discovery.handleProject db cfg)
+    |>.get "/resource/agents/:project_key" (Resources.Discovery.handleAgents db cfg)
+    |>.get "/resource/identity/:project" (Resources.Discovery.handleIdentity db cfg)
+    |>.get "/resource/product/:key" (Resources.Discovery.handleProduct db cfg)
     -- Mail resources
-    |>.get "/resource/message/:id" (Resources.Mail.handleMessage db)
-    |>.get "/resource/thread/:id" (Resources.Mail.handleThread db)
-    |>.get "/resource/inbox/:agent" (Resources.Mail.handleInbox db)
-    |>.get "/resource/outbox/:agent" (Resources.Mail.handleOutbox db)
-    |>.get "/resource/mailbox/:agent" (Resources.Mail.handleMailbox db)
+    |>.get "/resource/message/:id" (Resources.Mail.handleMessage db cfg)
+    |>.get "/resource/thread/:id" (Resources.Mail.handleThread db cfg)
+    |>.get "/resource/inbox/:agent" (Resources.Mail.handleInbox db cfg)
+    |>.get "/resource/outbox/:agent" (Resources.Mail.handleOutbox db cfg)
+    |>.get "/resource/mailbox/:agent" (Resources.Mail.handleMailbox db cfg)
     -- View resources
-    |>.get "/resource/views/urgent-unread/:agent" (Resources.Views.handleUrgentUnread db)
-    |>.get "/resource/views/ack-required/:agent" (Resources.Views.handleAckRequired db)
-    |>.get "/resource/views/acks-stale/:agent" (Resources.Views.handleAcksStale db)
-    |>.get "/resource/views/ack-overdue/:agent" (Resources.Views.handleAckOverdue db)
+    |>.get "/resource/views/urgent-unread/:agent" (Resources.Views.handleUrgentUnread db cfg)
+    |>.get "/resource/views/ack-required/:agent" (Resources.Views.handleAckRequired db cfg)
+    |>.get "/resource/views/acks-stale/:agent" (Resources.Views.handleAcksStale db cfg)
+    |>.get "/resource/views/ack-overdue/:agent" (Resources.Views.handleAckOverdue db cfg)
     -- File reservations
-    |>.get "/resource/file_reservations/:slug" (Resources.FileReservations.handleFileReservations db)
+    |>.get "/resource/file_reservations/:slug" (Resources.FileReservations.handleFileReservations db cfg)
     -- Config
     |>.get "/resource/config/environment" (Resources.Config.handleEnvironment cfg)
 
@@ -131,6 +170,7 @@ def create (cfg : Config) (db : Storage.Database) (rateLimitState : Middleware.R
     |>.use (Middleware.RequestLog.requestLog cfg.requestLogEnabled)
     |>.use (Middleware.CORS.cors cfg.cors)
     |>.use (Middleware.RateLimit.rateLimit rateLimitState cfg.http.rateLimit)
+    |>.use (Middleware.Security.jwtRbac cfg)
     |>.use (Middleware.Auth.optionalBearerAuth cfg.http.bearerToken cfg.http.allowLocalhostUnauthenticated)
 
 /-- Run the server (blocking) -/

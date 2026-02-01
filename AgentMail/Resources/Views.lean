@@ -2,6 +2,7 @@
   AgentMail.Resources.Views - View-related MCP resources for filtered message views
 -/
 import Citadel
+import AgentMail.Config
 import AgentMail.Storage.Database
 import AgentMail.Resources.Core
 import AgentMail.Tools.Identity
@@ -30,7 +31,7 @@ private def inboxEntryToJson (entry : Storage.Database.InboxEntry) (includeBodie
   Lean.Json.mkObj withBody
 
 /-- Handle GET /resource/views/urgent-unread/:agent -/
-def handleUrgentUnread (db : Storage.Database) (req : ServerRequest) : IO Response := do
+def handleUrgentUnread (db : Storage.Database) (cfg : AgentMail.Config) (req : ServerRequest) : IO Response := do
   let agentName ← match req.param "agent" with
     | some s => pure s
     | none => return Core.resourceBadRequest "missing agent parameter"
@@ -60,10 +61,10 @@ def handleUrgentUnread (db : Storage.Database) (req : ServerRequest) : IO Respon
     ("messages", Lean.Json.arr entriesJson),
     ("count", Lean.Json.num entries.size)
   ]
-  pure (Core.resourceOk result)
+  Core.resourceOkFormatted cfg req "views.urgent_unread" result
 
 /-- Handle GET /resource/views/ack-required/:agent -/
-def handleAckRequired (db : Storage.Database) (req : ServerRequest) : IO Response := do
+def handleAckRequired (db : Storage.Database) (cfg : AgentMail.Config) (req : ServerRequest) : IO Response := do
   let agentName ← match req.param "agent" with
     | some s => pure s
     | none => return Core.resourceBadRequest "missing agent parameter"
@@ -93,10 +94,10 @@ def handleAckRequired (db : Storage.Database) (req : ServerRequest) : IO Respons
     ("messages", Lean.Json.arr entriesJson),
     ("count", Lean.Json.num entries.size)
   ]
-  pure (Core.resourceOk result)
+  Core.resourceOkFormatted cfg req "views.ack_required" result
 
 /-- Handle GET /resource/views/acks-stale/:agent -/
-def handleAcksStale (db : Storage.Database) (req : ServerRequest) : IO Response := do
+def handleAcksStale (db : Storage.Database) (cfg : AgentMail.Config) (req : ServerRequest) : IO Response := do
   let agentName ← match req.param "agent" with
     | some s => pure s
     | none => return Core.resourceBadRequest "missing agent parameter"
@@ -129,10 +130,10 @@ def handleAcksStale (db : Storage.Database) (req : ServerRequest) : IO Response 
     ("messages", Lean.Json.arr entriesJson),
     ("count", Lean.Json.num entries.size)
   ]
-  pure (Core.resourceOk result)
+  Core.resourceOkFormatted cfg req "views.acks_stale" result
 
 /-- Handle GET /resource/views/ack-overdue/:agent -/
-def handleAckOverdue (db : Storage.Database) (req : ServerRequest) : IO Response := do
+def handleAckOverdue (db : Storage.Database) (cfg : AgentMail.Config) (req : ServerRequest) : IO Response := do
   let agentName ← match req.param "agent" with
     | some s => pure s
     | none => return Core.resourceBadRequest "missing agent parameter"
@@ -165,6 +166,6 @@ def handleAckOverdue (db : Storage.Database) (req : ServerRequest) : IO Response
     ("messages", Lean.Json.arr entriesJson),
     ("count", Lean.Json.num entries.size)
   ]
-  pure (Core.resourceOk result)
+  Core.resourceOkFormatted cfg req "views.ack_overdue" result
 
 end AgentMail.Resources.Views

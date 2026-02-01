@@ -57,19 +57,21 @@ def mkRequest (pathParams : List (String × String)) (queryParams : List (String
 
 test "handleMessage returns 404 for missing message" := do
   let db ← Storage.Database.openMemory
+  let cfg := Config.default
   let req := mkRequest [("id", "999")]
-  let resp ← Resources.Mail.handleMessage db req
+  let resp ← Resources.Mail.handleMessage db cfg req
   resp.status.code ≡ (404 : UInt16)
   db.close
 
 test "handleMessage returns message details" := do
   let db ← Storage.Database.openMemory
+  let cfg := Config.default
   let now := Chronos.Timestamp.fromSeconds 1700000000
   let projectId ← db.insertProject "p1" "/my/project" now
   let agentId ← db.insertAgent (mkAgent projectId "Sender" now)
   let messageId ← db.insertMessage (mkMessage projectId agentId "Test Subject" now)
   let req := mkRequest [("id", s!"{messageId}")]
-  let resp ← Resources.Mail.handleMessage db req
+  let resp ← Resources.Mail.handleMessage db cfg req
   resp.status.code ≡ (200 : UInt16)
   let json ← parseJsonResponse resp
   match json.getObjValAs? String "subject" with
@@ -79,11 +81,12 @@ test "handleMessage returns message details" := do
 
 test "handleInbox returns empty inbox" := do
   let db ← Storage.Database.openMemory
+  let cfg := Config.default
   let now := Chronos.Timestamp.fromSeconds 1700000000
   let projectId ← db.insertProject "p1" "/my/project" now
   let _ ← db.insertAgent (mkAgent projectId "Agent1" now)
   let req := mkRequest [("agent", "Agent1")] [("project", "/my/project")]
-  let resp ← Resources.Mail.handleInbox db req
+  let resp ← Resources.Mail.handleInbox db cfg req
   resp.status.code ≡ (200 : UInt16)
   let json ← parseJsonResponse resp
   match json.getObjVal? "count" with
@@ -93,6 +96,7 @@ test "handleInbox returns empty inbox" := do
 
 test "handleInbox returns messages" := do
   let db ← Storage.Database.openMemory
+  let cfg := Config.default
   let now := Chronos.Timestamp.fromSeconds 1700000000
   let projectId ← db.insertProject "p1" "/my/project" now
   let senderId ← db.insertAgent (mkAgent projectId "Sender" now)
@@ -100,7 +104,7 @@ test "handleInbox returns messages" := do
   let messageId ← db.insertMessage (mkMessage projectId senderId "Hello" now)
   db.insertMessageRecipient { messageId, agentId := recipientId, recipientType := RecipientType.toRecipient, readAt := none, ackedAt := none }
   let req := mkRequest [("agent", "Recipient")] [("project", "/my/project")]
-  let resp ← Resources.Mail.handleInbox db req
+  let resp ← Resources.Mail.handleInbox db cfg req
   resp.status.code ≡ (200 : UInt16)
   let json ← parseJsonResponse resp
   match json.getObjVal? "count" with
@@ -110,6 +114,7 @@ test "handleInbox returns messages" := do
 
 test "handleOutbox returns sent messages" := do
   let db ← Storage.Database.openMemory
+  let cfg := Config.default
   let now := Chronos.Timestamp.fromSeconds 1700000000
   let projectId ← db.insertProject "p1" "/my/project" now
   let senderId ← db.insertAgent (mkAgent projectId "Sender" now)
@@ -117,7 +122,7 @@ test "handleOutbox returns sent messages" := do
   let messageId ← db.insertMessage (mkMessage projectId senderId "Hello" now)
   db.insertMessageRecipient { messageId, agentId := recipientId, recipientType := RecipientType.toRecipient, readAt := none, ackedAt := none }
   let req := mkRequest [("agent", "Sender")] [("project", "/my/project")]
-  let resp ← Resources.Mail.handleOutbox db req
+  let resp ← Resources.Mail.handleOutbox db cfg req
   resp.status.code ≡ (200 : UInt16)
   let json ← parseJsonResponse resp
   match json.getObjVal? "count" with
@@ -127,12 +132,13 @@ test "handleOutbox returns sent messages" := do
 
 test "handleMailbox returns both inbox and outbox" := do
   let db ← Storage.Database.openMemory
+  let cfg := Config.default
   let now := Chronos.Timestamp.fromSeconds 1700000000
   let projectId ← db.insertProject "p1" "/my/project" now
   let agentId ← db.insertAgent (mkAgent projectId "Agent1" now)
   let _ ← db.insertMessage (mkMessage projectId agentId "Sent message" now)
   let req := mkRequest [("agent", "Agent1")] [("project", "/my/project")]
-  let resp ← Resources.Mail.handleMailbox db req
+  let resp ← Resources.Mail.handleMailbox db cfg req
   resp.status.code ≡ (200 : UInt16)
   let json ← parseJsonResponse resp
   match json.getObjVal? "inbox" with
@@ -151,13 +157,14 @@ test "handleMailbox returns both inbox and outbox" := do
 
 test "handleThread returns messages in thread" := do
   let db ← Storage.Database.openMemory
+  let cfg := Config.default
   let now := Chronos.Timestamp.fromSeconds 1700000000
   let projectId ← db.insertProject "p1" "/my/project" now
   let senderId ← db.insertAgent (mkAgent projectId "Sender" now)
   let msg := { mkMessage projectId senderId "In thread" now with threadId := some "thread-123" }
   let _ ← db.insertMessage msg
   let req := mkRequest [("id", "thread-123")] [("project", "/my/project")]
-  let resp ← Resources.Mail.handleThread db req
+  let resp ← Resources.Mail.handleThread db cfg req
   resp.status.code ≡ (200 : UInt16)
   let json ← parseJsonResponse resp
   match json.getObjVal? "count" with

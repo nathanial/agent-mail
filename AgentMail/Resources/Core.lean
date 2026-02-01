@@ -3,6 +3,8 @@
 -/
 import Citadel
 import Lean.Data.Json
+import AgentMail.Config
+import AgentMail.OutputFormat
 
 open Citadel
 open Herald.Core (StatusCode)
@@ -53,5 +55,12 @@ def resourceBadRequest (message : String) : Response :=
 /-- Create a JSON success response -/
 def resourceOk (json : Lean.Json) : Response :=
   Response.json (Lean.Json.compress json)
+
+/-- Create a JSON success response with optional output formatting. -/
+def resourceOkFormatted (cfg : AgentMail.Config) (req : ServerRequest) (name : String) (json : Lean.Json) : IO Response := do
+  let formatValue := req.queryParam "format"
+  match ← AgentMail.OutputFormat.apply json cfg formatValue name with
+  | .ok payload => pure (Response.json (Lean.Json.compress payload))
+  | .error e => pure (resourceBadRequest e)
 
 end AgentMail.Resources.Core

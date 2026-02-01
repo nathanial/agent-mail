@@ -2,6 +2,7 @@
   AgentMail.Notifications - Filesystem signal notifications for agents
 -/
 import Lean.Data.Json
+import Std.Data.HashMap
 
 namespace AgentMail.Notifications
 
@@ -45,7 +46,7 @@ private def ensureDir (path : String) : IO Unit := do
 /-- Get the signal file path for an agent -/
 def getSignalPath (config : NotificationConfig) (projectSlug agentName : String) : IO String := do
   let base ← expandTilde config.signalsDir
-  pure s!"{base}/{projectSlug}/{agentName}.signal"
+  pure s!"{base}/projects/{projectSlug}/agents/{agentName}.signal"
 
 /-- Notification metadata -/
 structure NotificationMetadata where
@@ -53,6 +54,10 @@ structure NotificationMetadata where
   timestamp : Nat
   /-- Type of event (e.g., "new_message", "ack_required") -/
   eventType : String
+  /-- Project slug for the notification -/
+  project : String
+  /-- Target agent name for the notification -/
+  agent : String
   /-- Message ID if applicable -/
   messageId : Option String := none
   /-- Thread ID if applicable -/
@@ -67,11 +72,16 @@ instance : Lean.ToJson NotificationMetadata where
   toJson m := Lean.Json.mkObj [
     ("timestamp", Lean.Json.num m.timestamp),
     ("event_type", Lean.Json.str m.eventType),
+    ("project", Lean.Json.str m.project),
+    ("agent", Lean.Json.str m.agent),
     ("message_id", match m.messageId with | some id => Lean.Json.str id | none => Lean.Json.null),
     ("thread_id", match m.threadId with | some id => Lean.Json.str id | none => Lean.Json.null),
     ("from_agent", match m.fromAgent with | some a => Lean.Json.str a | none => Lean.Json.null),
     ("priority", match m.priority with | some p => Lean.Json.str p | none => Lean.Json.null)
   ]
+
+initialize debounceRef : IO.Ref (Std.HashMap (String × String) Nat) ←
+  IO.mkRef ({} : Std.HashMap (String × String) Nat)
 
 /-- Touch signal file to notify agent of event -/
 def notifyAgent (config : NotificationConfig) (projectSlug agentName : String)
@@ -79,19 +89,30 @@ def notifyAgent (config : NotificationConfig) (projectSlug agentName : String)
   if !config.enabled then
     return
 
+  -- Debounce check
+  let now ← IO.monoMsNow
+  let key := (projectSlug, agentName)
+  let lastMap ← debounceRef.get
+  match lastMap.get? key with
+  | some last =>
+    if now - last < config.debounceMs then
+      return
+  | none => pure ()
+  debounceRef.modify fun m => m.insert key now
+
   -- Ensure signals directory exists
-  let signalDir ← expandTilde s!"{config.signalsDir}/{projectSlug}"
+  let signalDir ← expandTilde s!"{config.signalsDir}/projects/{projectSlug}/agents"
   ensureDir signalDir
 
   let signalPath ← getSignalPath config projectSlug agentName
 
   if config.includeMetadata then
     -- Write metadata to signal file
-    let m := match metadata with
-      | some m => m
-      | none =>
-        let now ← IO.monoMsNow
-        { timestamp := now, eventType }
+    let m ← match metadata with
+      | some m => pure m
+      | none => do
+          let nowTs ← IO.monoMsNow
+          pure { timestamp := nowTs, eventType, project := projectSlug, agent := agentName }
     let content := Lean.Json.compress (Lean.toJson m)
     IO.FS.writeFile signalPath content
   else
@@ -108,8 +129,10 @@ def notifyNewMessage (config : NotificationConfig) (projectSlug agentName : Stri
   let m : NotificationMetadata := {
     timestamp := now
     eventType := "new_message"
+    project := projectSlug
+    agent := agentName
     messageId := some messageId
-    threadId := some threadId
+    threadId := if threadId.isEmpty then none else some threadId
     fromAgent := some fromAgent
     priority := priority
   }
@@ -122,8 +145,10 @@ def notifyAckRequired (config : NotificationConfig) (projectSlug agentName : Str
   let m : NotificationMetadata := {
     timestamp := now
     eventType := "ack_required"
+    project := projectSlug
+    agent := agentName
     messageId := some messageId
-    threadId := some threadId
+    threadId := if threadId.isEmpty then none else some threadId
     fromAgent := some fromAgent
     priority := some "high"
   }

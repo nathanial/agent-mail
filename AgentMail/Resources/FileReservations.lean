@@ -3,6 +3,7 @@
 -/
 import Citadel
 import Chronos
+import AgentMail.Config
 import AgentMail.Storage.Database
 import AgentMail.Resources.Core
 import AgentMail.Tools.Identity
@@ -12,7 +13,7 @@ open Citadel
 namespace AgentMail.Resources.FileReservations
 
 /-- Handle GET /resource/file_reservations/:slug -/
-def handleFileReservations (db : Storage.Database) (req : ServerRequest) : IO Response := do
+def handleFileReservations (db : Storage.Database) (cfg : AgentMail.Config) (req : ServerRequest) : IO Response := do
   let slug ← match req.param "slug" with
     | some s => pure s
     | none => return Core.resourceBadRequest "missing slug parameter"
@@ -49,6 +50,6 @@ def handleFileReservations (db : Storage.Database) (req : ServerRequest) : IO Re
     ("reservations", Lean.Json.arr reservationsJson),
     ("count", Lean.Json.num reservationsJson.size)
   ]
-  pure (Core.resourceOk result)
+  Core.resourceOkFormatted cfg req "file_reservations" result
 
 end AgentMail.Resources.FileReservations
