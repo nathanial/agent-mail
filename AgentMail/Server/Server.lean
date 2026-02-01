@@ -3,6 +3,7 @@
 -/
 import Citadel
 import AgentMail.Config
+import AgentMail.Middleware
 import AgentMail.Protocol.JsonRpc
 import AgentMail.Storage.Database
 import AgentMail.Tools.Identity
@@ -93,9 +94,10 @@ def handleHealth (_req : ServerRequest) : IO Response := do
   ]
   pure (Response.json (Lean.Json.compress json))
 
-/-- Create and configure the server -/
-def create (cfg : Config) (db : Storage.Database) : Citadel.Server :=
-  Citadel.Server.create { port := cfg.port, host := cfg.host }
+/-- Create and configure the server with middleware -/
+def create (cfg : Config) (db : Storage.Database) (rateLimitState : Middleware.RateLimit.RateLimitState) : Citadel.Server :=
+  -- Build base server with routes
+  let server := Citadel.Server.create { port := cfg.port, host := cfg.host }
     |>.post "/rpc" (handleRpc db cfg)
     |>.get "/health" handleHealth
     -- Discovery resources
@@ -120,12 +122,42 @@ def create (cfg : Config) (db : Storage.Database) : Citadel.Server :=
     -- Config
     |>.get "/resource/config/environment" (Resources.Config.handleEnvironment cfg)
 
+  -- Apply middleware chain (order: request flows through outer→inner, response flows inner→outer)
+  -- 1. Request logging (outermost - logs all requests including rejected ones)
+  -- 2. CORS (handle preflight before auth)
+  -- 3. Rate limiting (reject before expensive operations)
+  -- 4. Authentication (innermost security layer)
+  server
+    |>.use (Middleware.RequestLog.requestLog cfg.requestLogEnabled)
+    |>.use (Middleware.CORS.cors cfg.cors)
+    |>.use (Middleware.RateLimit.rateLimit rateLimitState cfg.http.rateLimit)
+    |>.use (Middleware.Auth.optionalBearerAuth cfg.http.bearerToken cfg.http.allowLocalhostUnauthenticated)
+
 /-- Run the server (blocking) -/
 def run (cfg : Config) (db : Storage.Database) : IO Unit := do
   IO.println s!"Starting agent-mail server v{version}"
   IO.println s!"  Host: {cfg.host}"
   IO.println s!"  Port: {cfg.port}"
   IO.println s!"  Database: {cfg.databasePath}"
+
+  -- Display security settings
+  if cfg.http.bearerToken.isSome then
+    IO.println s!"  Auth: Bearer token required"
+    if cfg.http.allowLocalhostUnauthenticated then
+      IO.println s!"  Auth: Localhost bypass enabled"
+  else
+    IO.println s!"  Auth: Disabled (no token configured)"
+
+  if cfg.http.rateLimit.enabled then
+    IO.println s!"  Rate limit: {cfg.http.rateLimit.toolsPerMinute}/min (tools), {cfg.http.rateLimit.resourcesPerMinute}/min (resources)"
+
+  if cfg.cors.enabled then
+    let originsDisplay := if cfg.cors.origins.isEmpty then "*" else String.intercalate ", " cfg.cors.origins
+    IO.println s!"  CORS: Enabled (origins: {originsDisplay})"
+
+  if cfg.requestLogEnabled then
+    IO.println s!"  Request logging: Enabled"
+
   IO.println ""
   IO.println s!"Endpoints:"
   IO.println s!"  POST /rpc    - JSON-RPC 2.0 endpoint"
@@ -151,7 +183,10 @@ def run (cfg : Config) (db : Storage.Database) : IO Unit := do
   IO.println ""
   IO.println "Server running. Press Ctrl+C to stop."
 
-  let server := create cfg db
+  -- Initialize rate limit state
+  let rateLimitState ← Middleware.RateLimit.RateLimitState.create
+
+  let server := create cfg db rateLimitState
   server.run
 
 end AgentMail.Server

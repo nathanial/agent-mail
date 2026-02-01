@@ -31,6 +31,9 @@ import Tests.Resources.Discovery
 import Tests.Resources.Mail
 import Tests.Resources.Views
 import Tests.Resources.FileReservations
+import Tests.Middleware.Auth
+import Tests.Middleware.RateLimit
+import Tests.Middleware.CORS
 
 open Crucible
 

@@ -2,6 +2,9 @@
   AgentMail - MCP server for inter-agent communication
 -/
 import AgentMail.Config
+import AgentMail.Middleware
+import AgentMail.ToolFilter
+import AgentMail.Notifications
 import AgentMail.Models.Types
 import AgentMail.Models.Project
 import AgentMail.Models.Agent
