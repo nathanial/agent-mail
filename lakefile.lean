@@ -23,5 +23,5 @@ lean_exe «agent-mail» where
   root := `AgentMail.Main
 
 @[test_driver]
-lean_exe «agent-mail_tests» where
+lean_exe test where
   root := `Tests.Main

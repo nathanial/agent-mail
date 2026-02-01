@@ -27,6 +27,10 @@ import Tests.Search
 import Tests.Macros
 import Tests.BuildSlots
 import Tests.Products
+import Tests.Resources.Discovery
+import Tests.Resources.Mail
+import Tests.Resources.Views
+import Tests.Resources.FileReservations
 
 open Crucible
 

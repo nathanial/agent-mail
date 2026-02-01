@@ -14,6 +14,7 @@ import AgentMail.Tools.Search
 import AgentMail.Tools.Macros
 import AgentMail.Tools.BuildSlots
 import AgentMail.Tools.Products
+import AgentMail.Resources
 
 open Citadel
 
@@ -97,6 +98,27 @@ def create (cfg : Config) (db : Storage.Database) : Citadel.Server :=
   Citadel.Server.create { port := cfg.port, host := cfg.host }
     |>.post "/rpc" (handleRpc db cfg)
     |>.get "/health" handleHealth
+    -- Discovery resources
+    |>.get "/resource/projects" (Resources.Discovery.handleProjects db)
+    |>.get "/resource/project/:slug" (Resources.Discovery.handleProject db)
+    |>.get "/resource/agents/:project_key" (Resources.Discovery.handleAgents db)
+    |>.get "/resource/identity/:project" (Resources.Discovery.handleIdentity db)
+    |>.get "/resource/product/:key" (Resources.Discovery.handleProduct db)
+    -- Mail resources
+    |>.get "/resource/message/:id" (Resources.Mail.handleMessage db)
+    |>.get "/resource/thread/:id" (Resources.Mail.handleThread db)
+    |>.get "/resource/inbox/:agent" (Resources.Mail.handleInbox db)
+    |>.get "/resource/outbox/:agent" (Resources.Mail.handleOutbox db)
+    |>.get "/resource/mailbox/:agent" (Resources.Mail.handleMailbox db)
+    -- View resources
+    |>.get "/resource/views/urgent-unread/:agent" (Resources.Views.handleUrgentUnread db)
+    |>.get "/resource/views/ack-required/:agent" (Resources.Views.handleAckRequired db)
+    |>.get "/resource/views/acks-stale/:agent" (Resources.Views.handleAcksStale db)
+    |>.get "/resource/views/ack-overdue/:agent" (Resources.Views.handleAckOverdue db)
+    -- File reservations
+    |>.get "/resource/file_reservations/:slug" (Resources.FileReservations.handleFileReservations db)
+    -- Config
+    |>.get "/resource/config/environment" (Resources.Config.handleEnvironment cfg)
 
 /-- Run the server (blocking) -/
 def run (cfg : Config) (db : Storage.Database) : IO Unit := do
@@ -108,6 +130,24 @@ def run (cfg : Config) (db : Storage.Database) : IO Unit := do
   IO.println s!"Endpoints:"
   IO.println s!"  POST /rpc    - JSON-RPC 2.0 endpoint"
   IO.println s!"  GET  /health - Health check"
+  IO.println ""
+  IO.println s!"Resources:"
+  IO.println s!"  GET  /resource/projects                    - List all projects"
+  IO.println s!"  GET  /resource/project/:slug               - Project details"
+  IO.println s!"  GET  /resource/agents/:project_key         - Agents in project"
+  IO.println s!"  GET  /resource/identity/:project           - Identity resolution"
+  IO.println s!"  GET  /resource/product/:key                - Product with projects"
+  IO.println s!"  GET  /resource/message/:id                 - Single message"
+  IO.println s!"  GET  /resource/thread/:id                  - Thread messages"
+  IO.println s!"  GET  /resource/inbox/:agent                - Agent inbox"
+  IO.println s!"  GET  /resource/outbox/:agent               - Sent messages"
+  IO.println s!"  GET  /resource/mailbox/:agent              - Full mailbox"
+  IO.println s!"  GET  /resource/views/urgent-unread/:agent  - Urgent unread"
+  IO.println s!"  GET  /resource/views/ack-required/:agent   - Needing ack"
+  IO.println s!"  GET  /resource/views/acks-stale/:agent     - Stale acks"
+  IO.println s!"  GET  /resource/views/ack-overdue/:agent    - Overdue acks"
+  IO.println s!"  GET  /resource/file_reservations/:slug     - File reservations"
+  IO.println s!"  GET  /resource/config/environment          - Server config"
   IO.println ""
   IO.println "Server running. Press Ctrl+C to stop."
 

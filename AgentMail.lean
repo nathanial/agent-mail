@@ -24,4 +24,5 @@ import AgentMail.Tools.Search
 import AgentMail.Tools.Macros
 import AgentMail.Tools.BuildSlots
 import AgentMail.Tools.Products
+import AgentMail.Resources
 import AgentMail.Server.Server
