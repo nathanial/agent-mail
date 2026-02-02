@@ -4,6 +4,7 @@
 import Citadel
 import AgentMail.Config
 import AgentMail.Middleware
+import AgentMail.Mcp
 import AgentMail.Protocol.JsonRpc
 import AgentMail.Storage.Database
 import AgentMail.ToolFilter
@@ -26,104 +27,213 @@ namespace AgentMail.Server
 /-- Server version -/
 def version : String := "0.1.0"
 
-/-- Handle JSON-RPC requests -/
-def handleRpc (db : Storage.Database) (cfg : Config) (req : ServerRequest) : IO Response := do
-  let body := req.bodyString
+private def applyOutputFormatting (cfg : Config) (rpcReq : JsonRpc.Request) (resp : Response) : IO Response := do
+  let formatValue := match rpcReq.params with
+    | some params =>
+      match params.getObjValAs? String "format" with
+      | Except.ok v => some v
+      | Except.error _ => none
+    | none => none
 
-  -- Parse JSON
+  if formatValue.isNone && cfg.outputFormatDefault.isEmpty && cfg.toonDefaultFormat.isEmpty then
+    return resp
+  let bodyText := String.fromUTF8! resp.body
+  match Lean.Json.parse bodyText with
+  | Except.error _ => pure resp
+  | Except.ok json =>
+    match (Lean.FromJson.fromJson? json : Except String JsonRpc.Response) with
+    | Except.error _ => pure resp
+    | Except.ok rpcResp =>
+      match rpcResp.result with
+      | none => pure resp
+      | some result =>
+        match ← OutputFormat.apply result cfg formatValue rpcReq.method with
+        | .error e =>
+          let err := JsonRpc.Error.invalidParams (some e)
+          let errResp := JsonRpc.Response.failure rpcReq.id err
+          pure (Response.json (Lean.Json.compress (Lean.toJson errResp)))
+        | .ok formatted =>
+          let newResp : JsonRpc.Response := { rpcResp with result := some formatted }
+          pure (Response.json (Lean.Json.compress (Lean.toJson newResp)))
+
+private def dispatchTool (db : Storage.Database) (cfg : Config) (rpcReq : JsonRpc.Request) : IO Response := do
+  match rpcReq.method with
+  | "health_check" => Tools.Identity.handleHealthCheck db cfg rpcReq
+  | "ensure_project" => Tools.Identity.handleEnsureProject db cfg rpcReq
+  | "register_agent" => Tools.Identity.handleRegisterAgent db cfg rpcReq
+  | "whois" => Tools.Identity.handleWhois db cfg rpcReq
+  | "send_message" => Tools.Messaging.handleSendMessage db cfg rpcReq
+  | "reply_message" => Tools.Messaging.handleReplyMessage db cfg rpcReq
+  | "fetch_inbox" => Tools.Messaging.handleFetchInbox db cfg rpcReq
+  | "mark_message_read" => Tools.Messaging.handleMarkRead db cfg rpcReq
+  | "acknowledge_message" => Tools.Messaging.handleAcknowledge db cfg rpcReq
+  | "request_contact" => Tools.Contacts.handleRequestContact db rpcReq
+  | "respond_contact" => Tools.Contacts.handleRespondContact db rpcReq
+  | "list_contacts" => Tools.Contacts.handleListContacts db rpcReq
+  | "set_contact_policy" => Tools.Contacts.handleSetContactPolicy db rpcReq
+  | "file_reservation_paths" => Tools.FileReservations.handleFileReservationPaths db cfg rpcReq
+  | "release_file_reservations" => Tools.FileReservations.handleReleaseFileReservations db cfg rpcReq
+  | "renew_file_reservations" => Tools.FileReservations.handleRenewFileReservations db cfg rpcReq
+  | "force_release_file_reservation" => Tools.FileReservations.handleForceReleaseFileReservation db cfg rpcReq
+  | "install_precommit_guard" => Tools.GitGuard.handleInstallPrecommitGuard db cfg rpcReq
+  | "uninstall_precommit_guard" => Tools.GitGuard.handleUninstallPrecommitGuard db cfg rpcReq
+  | "search_messages" => Tools.Search.handleSearchMessages db cfg rpcReq
+  | "summarize_thread" => Tools.Search.handleSummarizeThread db cfg rpcReq
+  | "macro_start_session" => Tools.Macros.handleMacroStartSession db cfg rpcReq
+  | "macro_prepare_thread" => Tools.Macros.handleMacroPrepareThread db cfg rpcReq
+  | "macro_file_reservation_cycle" => Tools.Macros.handleMacroFileReservationCycle db cfg rpcReq
+  | "macro_contact_handshake" => Tools.Macros.handleMacroContactHandshake db cfg rpcReq
+  | "acquire_build_slot" => Tools.BuildSlots.handleAcquireBuildSlot db cfg rpcReq
+  | "renew_build_slot" => Tools.BuildSlots.handleRenewBuildSlot db cfg rpcReq
+  | "release_build_slot" => Tools.BuildSlots.handleReleaseBuildSlot db cfg rpcReq
+  | "ensure_product" => Tools.Products.handleEnsureProduct db cfg rpcReq
+  | "products_link" => Tools.Products.handleProductsLink db cfg rpcReq
+  | "search_messages_product" => Tools.Products.handleSearchMessagesProduct db cfg rpcReq
+  | "fetch_inbox_product" => Tools.Products.handleFetchInboxProduct db cfg rpcReq
+  | "summarize_thread_product" => Tools.Products.handleSummarizeThreadProduct db cfg rpcReq
+  | _ =>
+    let err := JsonRpc.Error.methodNotFound rpcReq.method
+    let resp := JsonRpc.Response.failure rpcReq.id err
+    pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
+
+private def handleToolRequest (db : Storage.Database) (cfg : Config) (rpcReq : JsonRpc.Request) : IO Response := do
+  -- Optional tool filtering (hide tools when not allowed)
+  if cfg.toolFilter.enabled && !ToolFilter.isToolAllowed cfg.toolFilter rpcReq.method then
+    if rpcReq.isNotification then
+      return Response.noContent
+    let err := JsonRpc.Error.methodNotFound rpcReq.method
+    let resp := JsonRpc.Response.failure rpcReq.id err
+    return Response.json (Lean.Json.compress (Lean.toJson resp))
+
+  -- Notifications must not return a response
+  if rpcReq.isNotification then
+    pure Response.noContent
+  else
+    let resp ← dispatchTool db cfg rpcReq
+    applyOutputFormatting cfg rpcReq resp
+
+private def parseJsonRpc (req : ServerRequest) : IO (Except Response JsonRpc.Request) := do
+  let body := req.bodyString
   match Lean.Json.parse body with
   | Except.error e =>
     let err := JsonRpc.Error.parseError (some e)
     let resp := JsonRpc.Response.failure none err
-    return Response.json (Lean.Json.compress (Lean.toJson resp))
+    pure (Except.error (Response.json (Lean.Json.compress (Lean.toJson resp))))
   | Except.ok json =>
-    -- Parse as JSON-RPC request
     match Lean.FromJson.fromJson? json with
     | Except.error e =>
       let err := JsonRpc.Error.invalidRequest (some e)
       let resp := JsonRpc.Response.failure none err
-      return Response.json (Lean.Json.compress (Lean.toJson resp))
+      pure (Except.error (Response.json (Lean.Json.compress (Lean.toJson resp))))
     | Except.ok (rpcReq : JsonRpc.Request) =>
-      -- Optional tool filtering (hide tools when not allowed)
-      if cfg.toolFilter.enabled && !ToolFilter.isToolAllowed cfg.toolFilter rpcReq.method then
-        if rpcReq.isNotification then
-          return Response.noContent
-        let err := JsonRpc.Error.methodNotFound rpcReq.method
-        let resp := JsonRpc.Response.failure rpcReq.id err
-        return Response.json (Lean.Json.compress (Lean.toJson resp))
+      pure (Except.ok rpcReq)
 
-      let formatValue := match rpcReq.params with
-        | some params =>
-          match params.getObjValAs? String "format" with
-          | Except.ok v => some v
-          | Except.error _ => none
-        | none => none
+private def originHost (origin : String) : String :=
+  let withoutScheme := match origin.splitOn "://" with
+    | _ :: rest => rest.head?.getD origin
+    | [] => origin
+  match withoutScheme.splitOn "/" with
+  | h :: _ => h
+  | [] => withoutScheme
 
-      -- Notifications must not return a response
-      if rpcReq.isNotification then
-        pure Response.noContent
-      else
-        -- Route to appropriate handler
-        let resp ← match rpcReq.method with
-        | "health_check" => Tools.Identity.handleHealthCheck db cfg rpcReq
-        | "ensure_project" => Tools.Identity.handleEnsureProject db cfg rpcReq
-        | "register_agent" => Tools.Identity.handleRegisterAgent db cfg rpcReq
-        | "whois" => Tools.Identity.handleWhois db cfg rpcReq
-        | "send_message" => Tools.Messaging.handleSendMessage db cfg rpcReq
-        | "reply_message" => Tools.Messaging.handleReplyMessage db cfg rpcReq
-        | "fetch_inbox" => Tools.Messaging.handleFetchInbox db cfg rpcReq
-        | "mark_message_read" => Tools.Messaging.handleMarkRead db cfg rpcReq
-        | "acknowledge_message" => Tools.Messaging.handleAcknowledge db cfg rpcReq
-        | "request_contact" => Tools.Contacts.handleRequestContact db rpcReq
-        | "respond_contact" => Tools.Contacts.handleRespondContact db rpcReq
-        | "list_contacts" => Tools.Contacts.handleListContacts db rpcReq
-        | "set_contact_policy" => Tools.Contacts.handleSetContactPolicy db rpcReq
-        | "file_reservation_paths" => Tools.FileReservations.handleFileReservationPaths db cfg rpcReq
-        | "release_file_reservations" => Tools.FileReservations.handleReleaseFileReservations db cfg rpcReq
-        | "renew_file_reservations" => Tools.FileReservations.handleRenewFileReservations db cfg rpcReq
-        | "force_release_file_reservation" => Tools.FileReservations.handleForceReleaseFileReservation db cfg rpcReq
-        | "install_precommit_guard" => Tools.GitGuard.handleInstallPrecommitGuard db cfg rpcReq
-        | "uninstall_precommit_guard" => Tools.GitGuard.handleUninstallPrecommitGuard db cfg rpcReq
-        | "search_messages" => Tools.Search.handleSearchMessages db cfg rpcReq
-        | "summarize_thread" => Tools.Search.handleSummarizeThread db cfg rpcReq
-        | "macro_start_session" => Tools.Macros.handleMacroStartSession db cfg rpcReq
-        | "macro_prepare_thread" => Tools.Macros.handleMacroPrepareThread db cfg rpcReq
-        | "macro_file_reservation_cycle" => Tools.Macros.handleMacroFileReservationCycle db cfg rpcReq
-        | "macro_contact_handshake" => Tools.Macros.handleMacroContactHandshake db cfg rpcReq
-        | "acquire_build_slot" => Tools.BuildSlots.handleAcquireBuildSlot db cfg rpcReq
-        | "renew_build_slot" => Tools.BuildSlots.handleRenewBuildSlot db cfg rpcReq
-        | "release_build_slot" => Tools.BuildSlots.handleReleaseBuildSlot db cfg rpcReq
-        | "ensure_product" => Tools.Products.handleEnsureProduct db cfg rpcReq
-        | "products_link" => Tools.Products.handleProductsLink db cfg rpcReq
-        | "search_messages_product" => Tools.Products.handleSearchMessagesProduct db cfg rpcReq
-        | "fetch_inbox_product" => Tools.Products.handleFetchInboxProduct db cfg rpcReq
-        | "summarize_thread_product" => Tools.Products.handleSummarizeThreadProduct db cfg rpcReq
-        | _ =>
-          let err := JsonRpc.Error.methodNotFound rpcReq.method
+private def hostOnly (hostHeader : String) : String :=
+  match hostHeader.splitOn ":" with
+  | h :: _ => h
+  | [] => hostHeader
+
+private def isLocalHost (host : String) : Bool :=
+  host == "localhost" || host == "127.0.0.1" || host == "[::1]"
+
+private def isOriginAllowed (cfg : Config) (req : ServerRequest) : Bool :=
+  match req.header "Origin" with
+  | none => true
+  | some origin =>
+    let originHost := originHost origin
+    let hostHeader := req.header "Host" |>.getD ""
+    let hostName := hostOnly hostHeader
+    let sameHost := (!hostName.isEmpty) && hostName == originHost
+    let localMatch := isLocalHost originHost && isLocalHost hostName
+    let inCorsList := !cfg.cors.origins.isEmpty && cfg.cors.origins.contains origin
+    sameHost || localMatch || inCorsList
+
+private def handleMcpGet (cfg : Config) (req : ServerRequest) : IO Response := do
+  if !isOriginAllowed cfg req then
+    return Response.forbidden "Origin not allowed"
+  -- Streamable HTTP GET is for SSE. We do not support SSE yet.
+  pure (Response.methodNotAllowed ["POST"])
+
+private def handleMcpPost (db : Storage.Database) (cfg : Config) (req : ServerRequest) : IO Response := do
+  if !isOriginAllowed cfg req then
+    return Response.forbidden "Origin not allowed"
+  let rpcReq ← parseJsonRpc req
+  match rpcReq with
+  | Except.error resp => pure resp
+  | Except.ok rpcReq =>
+    -- MCP lifecycle and tool routing
+    match rpcReq.method with
+    | "initialize" =>
+      let payload := Mcp.initializeResult "agent-mail" version
+      let resp := JsonRpc.Response.success rpcReq.id payload
+      pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
+    | "notifications/initialized" =>
+      pure Response.noContent
+    | "ping" =>
+      let resp := JsonRpc.Response.success rpcReq.id (Lean.Json.mkObj [])
+      pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
+    | "tools/list" =>
+      let tools := Mcp.allTools.filter fun tool =>
+        if cfg.toolFilter.enabled then
+          ToolFilter.isToolAllowed cfg.toolFilter tool.name
+        else
+          true
+      let toolsJson := tools.toArray.map Mcp.ToolSpec.toJson
+      let payload := Lean.Json.mkObj [
+        ("tools", Lean.Json.arr toolsJson)
+      ]
+      let resp := JsonRpc.Response.success rpcReq.id payload
+      pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
+    | "tools/call" =>
+      let params := rpcReq.params.getD Lean.Json.null
+      let toolName ← match params.getObjValAs? String "name" with
+        | Except.ok name => pure name
+        | Except.error _ =>
+          let err := JsonRpc.Error.invalidParams (some "missing required param: name")
           let resp := JsonRpc.Response.failure rpcReq.id err
+          return Response.json (Lean.Json.compress (Lean.toJson resp))
+      let args := match params.getObjVal? "arguments" with
+        | Except.ok v => if v.isNull then none else some v
+        | Except.error _ => none
+      let toolReq : JsonRpc.Request := { method := toolName, params := args, id := rpcReq.id }
+      let toolResp ← handleToolRequest db cfg toolReq
+      let bodyText := String.fromUTF8! toolResp.body
+      match Lean.Json.parse bodyText with
+      | Except.error _ =>
+        let payload := Mcp.callToolResult (Lean.Json.str "Failed to parse tool response") true
+        let resp := JsonRpc.Response.success rpcReq.id payload
+        pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
+      | Except.ok json =>
+        match (Lean.FromJson.fromJson? json : Except String JsonRpc.Response) with
+        | Except.error _ =>
+          let payload := Mcp.callToolResult (Lean.Json.str "Invalid tool response format") true
+          let resp := JsonRpc.Response.success rpcReq.id payload
           pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
-
-        -- Apply output formatting to successful tool responses (if requested)
-        if formatValue.isNone && cfg.outputFormatDefault.isEmpty && cfg.toonDefaultFormat.isEmpty then
-          return resp
-        let bodyText := String.fromUTF8! resp.body
-        match Lean.Json.parse bodyText with
-        | Except.error _ => pure resp
-        | Except.ok json =>
-          match (Lean.FromJson.fromJson? json : Except String JsonRpc.Response) with
-          | Except.error _ => pure resp
-          | Except.ok rpcResp =>
-            match rpcResp.result with
-            | none => pure resp
-            | some result =>
-              match ← OutputFormat.apply result cfg formatValue rpcReq.method with
-              | .error e =>
-                let err := JsonRpc.Error.invalidParams (some e)
-                let errResp := JsonRpc.Response.failure rpcReq.id err
-                pure (Response.json (Lean.Json.compress (Lean.toJson errResp)))
-              | .ok formatted =>
-                let newResp : JsonRpc.Response := { rpcResp with result := some formatted }
-                pure (Response.json (Lean.Json.compress (Lean.toJson newResp)))
+        | Except.ok toolRpc =>
+          match toolRpc.error, toolRpc.result with
+          | some err, _ =>
+            let payload := Mcp.callToolResult (Lean.toJson err) true
+            let resp := JsonRpc.Response.success rpcReq.id payload
+            pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
+          | none, some result =>
+            let payload := Mcp.callToolResult result false
+            let resp := JsonRpc.Response.success rpcReq.id payload
+            pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
+          | none, none =>
+            let payload := Mcp.callToolResult (Lean.Json.str "Tool returned no result") true
+            let resp := JsonRpc.Response.success rpcReq.id payload
+            pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
+    | _ =>
+      -- Legacy JSON-RPC tool call
+      handleToolRequest db cfg rpcReq
 
 /-- Handle health check requests -/
 def handleHealth (_req : ServerRequest) : IO Response := do
@@ -137,7 +247,10 @@ def handleHealth (_req : ServerRequest) : IO Response := do
 def create (cfg : Config) (db : Storage.Database) (rateLimitState : Middleware.RateLimit.RateLimitState) : Citadel.Server :=
   -- Build base server with routes
   let server := Citadel.Server.create { port := cfg.port, host := cfg.host }
-    |>.post "/rpc" (handleRpc db cfg)
+    |>.post "/rpc" (handleMcpPost db cfg)
+    |>.get "/rpc" (handleMcpGet cfg)
+    |>.post "/mcp" (handleMcpPost db cfg)
+    |>.get "/mcp" (handleMcpGet cfg)
     |>.get "/health" handleHealth
     -- Discovery resources
     |>.get "/resource/projects" (Resources.Discovery.handleProjects db cfg)
@@ -200,7 +313,10 @@ def run (cfg : Config) (db : Storage.Database) : IO Unit := do
 
   IO.println ""
   IO.println s!"Endpoints:"
-  IO.println s!"  POST /rpc    - JSON-RPC 2.0 endpoint"
+  IO.println s!"  POST /mcp    - MCP JSON-RPC endpoint"
+  IO.println s!"  GET  /mcp    - MCP SSE (405: not supported)"
+  IO.println s!"  POST /rpc    - Legacy JSON-RPC + MCP endpoint"
+  IO.println s!"  GET  /rpc    - MCP SSE (405: not supported)"
   IO.println s!"  GET  /health - Health check"
   IO.println ""
   IO.println s!"Resources:"

@@ -155,7 +155,12 @@ lake exe agent-mail serve
 
 ## MCP Tools API Reference
 
-All tools are invoked via JSON-RPC 2.0 over HTTP POST to `/rpc`.
+Agent-Mail exposes a standards-compliant MCP endpoint at `/mcp` (JSON-RPC 2.0 over HTTP).
+For legacy clients, `/rpc` continues to accept the original tool methods directly.
+MCP clients should use:
+
+- `POST /mcp` for JSON-RPC requests
+- `GET /mcp` for SSE (returns `405 Method Not Allowed` because SSE is not implemented yet)
 
 ### Identity Tools
 
