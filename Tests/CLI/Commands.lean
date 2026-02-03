@@ -88,22 +88,6 @@ test "agentMailCommand parses serve" := do
     result.commandPath ≡ ["serve"]
   | .error msg => throw (IO.userError s!"Parse failed: {msg}")
 
-test "agentMailCommand parses share export" := do
-  match Parlance.parse agentMailCommand ["share", "export", "--output", "dist", "--project", "alpha", "--project", "beta"] with
-  | .ok result =>
-    result.commandPath ≡ ["share", "export"]
-    (result.get (α := String) "output") ≡ some "dist"
-    (result.getStrings "project") ≡ ["alpha", "beta"]
-  | .error msg => throw (IO.userError s!"Parse failed: {msg}")
-
-test "agentMailCommand parses share preview" := do
-  match Parlance.parse agentMailCommand ["share", "preview", ".", "--port", "9100"] with
-  | .ok result =>
-    result.commandPath ≡ ["share", "preview"]
-    (result.get (α := String) "path") ≡ some "."
-    (result.getNat "port") ≡ some 9100
-  | .error msg => throw (IO.userError s!"Parse failed: {msg}")
-
 test "agentMailCommand empty args parses as root" := do
   match Parlance.parse agentMailCommand [] with
   | .ok result =>

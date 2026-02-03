@@ -32,4 +32,3 @@ import AgentMail.Server.Server
 import AgentMail.CLI.Commands
 import AgentMail.CLI.Output
 import AgentMail.CLI.Handlers
-import AgentMail.Share

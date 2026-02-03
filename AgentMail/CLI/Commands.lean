@@ -33,37 +33,6 @@ def agentMailCommand : Command := command "agent-mail" do
     Cmd.flag "limit" (short := some 'l') (argType := .nat)
       (description := "Max messages to show") (defaultValue := some "20")
 
-  -- share subcommand group
-  Cmd.subcommand "share" do
-    Cmd.description "Static share/export utilities"
-
-    Cmd.subcommand "export" do
-      Cmd.description "Export a static bundle (snapshot + viewer)"
-      Cmd.flag "output" (short := some 'o') (description := "Output directory") (required := true)
-      Cmd.repeatableFlag "project" (short := some 'p') (description := "Limit export to project slug or human key")
-      Cmd.flag "scrub-preset" (description := "Scrub preset: standard, strict, archive")
-        (defaultValue := some "standard")
-
-    Cmd.subcommand "update" do
-      Cmd.description "Update an existing bundle in-place"
-      Cmd.flag "output" (short := some 'o') (description := "Output directory") (required := true)
-      Cmd.repeatableFlag "project" (short := some 'p') (description := "Limit export to project slug or human key")
-      Cmd.flag "scrub-preset" (description := "Scrub preset: standard, strict, archive")
-        (defaultValue := some "standard")
-
-    Cmd.subcommand "preview" do
-      Cmd.description "Preview a bundle directory with a local static server"
-      Cmd.arg "path" (argType := .string) (description := "Bundle directory") (required := false) (defaultValue := some ".")
-      Cmd.flag "port" (short := some 'p') (argType := .nat) (description := "Preview port")
-        (defaultValue := some "9000")
-
-    Cmd.subcommand "verify" do
-      Cmd.description "Verify bundle manifest and database hash"
-      Cmd.arg "path" (argType := .string) (description := "Bundle directory") (required := false) (defaultValue := some ".")
-
-    Cmd.subcommand "wizard" do
-      Cmd.description "Print share wizard guidance"
-
   -- config subcommand group
   Cmd.subcommand "config" do
     Cmd.description "Configuration management"

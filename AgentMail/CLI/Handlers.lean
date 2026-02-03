@@ -6,7 +6,6 @@ import AgentMail.Storage.Database
 import AgentMail.Server.Server
 import AgentMail.CLI.Output
 import AgentMail.CLI.Commands
-import AgentMail.Share
 import Parlance
 import Quarry
 
@@ -102,66 +101,6 @@ where
       createdTs := entry.createdTs
     })
 
-/-- Handle 'share export' command -/
-def handleShareExport (result : ParseResult) (mode : Mode) : IO Result := do
-  let output := result.get (α := String) "output" |>.getD ""
-  if output.isEmpty then
-    pure (.error (formatError "Output directory is required" mode (some "Usage: agent-mail share export --output <dir>")))
-  else
-    let projects := result.getStrings "project" |>.toArray
-    let scrubPresetStr := result.get (α := String) "scrub-preset" |>.getD "standard"
-    match Share.ScrubPreset.parse scrubPresetStr with
-    | .error err =>
-      pure (.error (formatError err mode))
-    | .ok scrubPreset =>
-      let cfg ← Config.fromEnv
-      try
-        let res ← Share.exportBundle cfg { outputDir := output, projects := projects, scrubPreset := scrubPreset }
-        pure (.success (formatSuccess s!"Exported bundle to {res.outputDir}" mode))
-      catch e =>
-        pure (.error (formatError e.toString mode))
-
-/-- Handle 'share update' command -/
-def handleShareUpdate (result : ParseResult) (mode : Mode) : IO Result := do
-  let output := result.get (α := String) "output" |>.getD ""
-  if output.isEmpty then
-    pure (.error (formatError "Output directory is required" mode (some "Usage: agent-mail share update --output <dir>")))
-  else
-    let projects := result.getStrings "project" |>.toArray
-    let scrubPresetStr := result.get (α := String) "scrub-preset" |>.getD "standard"
-    match Share.ScrubPreset.parse scrubPresetStr with
-    | .error err =>
-      pure (.error (formatError err mode))
-    | .ok scrubPreset =>
-      let cfg ← Config.fromEnv
-      try
-        let res ← Share.updateBundle cfg { outputDir := output, projects := projects, scrubPreset := scrubPreset }
-        pure (.success (formatSuccess s!"Updated bundle at {res.outputDir}" mode))
-      catch e =>
-        pure (.error (formatError e.toString mode))
-
-/-- Handle 'share preview' command -/
-def handleSharePreview (result : ParseResult) (mode : Mode) : IO Result := do
-  let path := result.get (α := String) "path" |>.getD "."
-  let port := result.getNat "port" |>.getD 9000
-  try
-    Share.previewBundle path port
-    pure (.success "")
-  catch e =>
-    pure (.error (formatError e.toString mode))
-
-/-- Handle 'share verify' command -/
-def handleShareVerify (result : ParseResult) (mode : Mode) : IO Result := do
-  let path := result.get (α := String) "path" |>.getD "."
-  try
-    Share.verifyBundle path
-    pure (.success (formatSuccess s!"Verified bundle at {path}" mode))
-  catch e =>
-    pure (.error (formatError e.toString mode))
-
-/-- Handle 'share wizard' command -/
-def handleShareWizard (mode : Mode) : IO Result := do
-  pure (.success (formatSuccess Share.wizardMessage mode))
 
 /-- Handle 'config show-port' command -/
 def handleConfigShowPort (mode : Mode) : IO Result := do
@@ -283,11 +222,6 @@ def dispatch (parseResult : ParseResult) : IO Result := do
   | ["serve"] => handleServe
   | ["list-projects"] => handleListProjects mode
   | ["list-acks"] => handleListAcks parseResult mode
-  | ["share", "export"] => handleShareExport parseResult mode
-  | ["share", "update"] => handleShareUpdate parseResult mode
-  | ["share", "preview"] => handleSharePreview parseResult mode
-  | ["share", "verify"] => handleShareVerify parseResult mode
-  | ["share", "wizard"] => handleShareWizard mode
   | ["config", "show-port"] => handleConfigShowPort mode
   | ["config", "set-port"] => handleConfigSetPort parseResult mode
   | ["doctor", "check"] => handleDoctorCheck mode

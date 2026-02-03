@@ -9,10 +9,22 @@ import AgentMail.Protocol.JsonRpc
 import AgentMail.Storage.Database
 import AgentMail.Storage.Archive
 import AgentMail.Tools.Identity
+import AgentMail.SSE
 
 open Citadel
 
 namespace AgentMail.Tools.Messaging
+
+private def publishMailEvent (eventType : String) (project : Project) (payload : Lean.Json) : IO Unit := do
+  let enriched := match payload with
+    | Lean.Json.obj entries =>
+      let base : List (String × Lean.Json) := [
+        ("project_slug", Lean.Json.str project.slug),
+        ("project_key", Lean.Json.str project.humanKey)
+      ]
+      Lean.Json.mkObj (base ++ entries.toList)
+    | _ => payload
+  AgentMail.SSE.publish eventType enriched
 
 /-- Generate a unique thread ID -/
 def generateThreadId : IO String := do
@@ -218,6 +230,17 @@ def handleSendMessage (db : Storage.Database) (cfg : Config) (req : JsonRpc.Requ
   ]
   let recipientsForArchive := toNames ++ ccNames ++ bccNames
   Storage.writeMessageBundle archive frontmatter bodyMd sender.name recipientsForArchive now subject threadIdOpt
+
+  -- Broadcast SSE event for live UI updates
+  publishMailEvent "message.sent" project (Lean.Json.mkObj [
+    ("message_id", Lean.Json.num messageId),
+    ("thread_id", match threadIdOpt with | some t => Lean.Json.str t | none => Lean.Json.null),
+    ("sender", Lean.Json.str sender.name),
+    ("subject", Lean.Json.str subject),
+    ("importance", Lean.toJson importance),
+    ("ack_required", Lean.Json.bool ackRequired),
+    ("created_ts", Lean.Json.num now.seconds)
+  ])
 
   -- Build response
   let payload := Lean.Json.mkObj [
@@ -460,6 +483,18 @@ def handleReplyMessage (db : Storage.Database) (cfg : Config) (req : JsonRpc.Req
   let recipientsForArchive := toNames ++ ccNames ++ bccNames
   Storage.writeMessageBundle archive frontmatter bodyMd sender.name recipientsForArchive now subject (some threadId)
 
+  -- Broadcast SSE event for live UI updates
+  publishMailEvent "message.reply" project (Lean.Json.mkObj [
+    ("message_id", Lean.Json.num messageId),
+    ("thread_id", Lean.Json.str threadId),
+    ("reply_to", Lean.Json.num originalMessageId),
+    ("sender", Lean.Json.str sender.name),
+    ("subject", Lean.Json.str subject),
+    ("importance", Lean.toJson importance),
+    ("ack_required", Lean.Json.bool originalMsg.ackRequired),
+    ("created_ts", Lean.Json.num now.seconds)
+  ])
+
   -- Build response
   let payload := Lean.Json.mkObj [
     ("id", Lean.Json.num messageId),
@@ -653,6 +688,11 @@ def handleMarkRead (db : Storage.Database) (_cfg : Config) (req : JsonRpc.Reques
         ("read_at", if updated then Lean.Json.num now.seconds else Lean.Json.null)
       ]
       let resp := JsonRpc.Response.success req.id result
+      publishMailEvent "message.read" project (Lean.Json.mkObj [
+        ("message_id", Lean.Json.num messageId),
+        ("agent_name", Lean.Json.str agent.name),
+        ("read_at", if updated then Lean.Json.num now.seconds else Lean.Json.null)
+      ])
       pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
 
 /-- Handle acknowledge_message request -/
@@ -743,6 +783,12 @@ def handleAcknowledge (db : Storage.Database) (_cfg : Config) (req : JsonRpc.Req
         ("read_at", Lean.Json.num now.seconds)
       ]
       let resp := JsonRpc.Response.success req.id result
+      publishMailEvent "message.ack" project (Lean.Json.mkObj [
+        ("message_id", Lean.Json.num messageId),
+        ("agent_name", Lean.Json.str agent.name),
+        ("acknowledged_at", if updated then Lean.Json.num now.seconds else Lean.Json.null),
+        ("read_at", Lean.Json.num now.seconds)
+      ])
       pure (Response.json (Lean.Json.compress (Lean.toJson resp)))
 
 end AgentMail.Tools.Messaging

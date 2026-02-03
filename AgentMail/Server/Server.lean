@@ -20,6 +20,7 @@ import AgentMail.Tools.BuildSlots
 import AgentMail.Tools.Products
 import AgentMail.Resources
 import AgentMail.Web.App
+import AgentMail.SSE
 
 open Citadel
 
@@ -333,6 +334,7 @@ def run (cfg : Config) (db : Storage.Database) : IO Unit := do
   IO.println s!"  GET  /rpc    - MCP SSE (405: not supported)"
   IO.println s!"  GET  /health - Health check"
   IO.println s!"  GET  /app    - Live web UI"
+  IO.println s!"  GET  /app/events/mail - Live mail events (SSE)"
   IO.println ""
   IO.println s!"Resources:"
   IO.println s!"  GET  /resource/projects                    - List all projects"
@@ -370,7 +372,14 @@ def run (cfg : Config) (db : Storage.Database) : IO Unit := do
     | none => pure none
 
   let webHandler := AgentMail.Web.buildHandler stencilRef
+
+  -- SSE for live UI updates
+  let sseManager ← Citadel.SSE.ConnectionManager.create
+  AgentMail.SSE.setManager sseManager
+
   let server := create cfg db rateLimitState (some webHandler)
+    |>.withSSE sseManager
+    |>.sseRoute "/app/events/mail" AgentMail.SSE.defaultTopic
   server.run
 
 end AgentMail.Server

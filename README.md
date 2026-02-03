@@ -460,24 +460,15 @@ lake exe agent-mail doctor repair      # VACUUM and ANALYZE
 lake exe agent-mail clear-and-reset -f
 ```
 
-### Static Export (Share)
+### Live Web UI
+
+Start the server and open the live UI:
 
 ```bash
-# Export a static bundle
-lake exe agent-mail share export -o ./bundle [-p <project>] [--scrub-preset standard|strict|archive]
-
-# Update existing bundle
-lake exe agent-mail share update -o ./bundle
-
-# Preview bundle locally
-lake exe agent-mail share preview ./bundle [-p 9000]
-
-# Verify bundle integrity
-lake exe agent-mail share verify ./bundle
-
-# Show export wizard
-lake exe agent-mail share wizard
+lake exe agent-mail
 ```
+
+Then visit `http://localhost:8765/app` (or your configured host/port). The UI includes live updates over SSE at `/app/events/mail`.
 
 ### Configuration
 
