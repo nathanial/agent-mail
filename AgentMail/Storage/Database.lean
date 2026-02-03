@@ -825,6 +825,34 @@ structure MessageWithSender where
   senderName : String
   deriving Repr, Inhabited
 
+/-- Thread summary for UI listings. -/
+structure ThreadSummary where
+  threadId : String
+  messageCount : Nat
+  lastMessageId : Nat
+  lastSubject : String
+  lastSenderName : String
+  lastImportance : AgentMail.Importance
+  lastAckRequired : Bool
+  lastCreatedTs : Chronos.Timestamp
+  lastBodyMd : Option String
+  unreadCount : Option Nat
+  deriving Repr
+
+instance : Inhabited ThreadSummary where
+  default := {
+    threadId := ""
+    messageCount := 0
+    lastMessageId := 0
+    lastSubject := ""
+    lastSenderName := ""
+    lastImportance := .normal
+    lastAckRequired := false
+    lastCreatedTs := Chronos.Timestamp.fromSeconds 0
+    lastBodyMd := none
+    unreadCount := none
+  }
+
 /-- Search result entry -/
 structure SearchResult where
   id : Nat
@@ -860,6 +888,60 @@ where
       threadId
       createdTs := Chronos.Timestamp.fromSeconds createdTs
       senderName
+    }
+
+/-- Query thread summaries for a project (optionally scoped to an agent). -/
+def queryThreadSummaries (db : Database) (projectId : Nat) (limit : Nat) (agentIdOpt : Option Nat := none) : IO (Array ThreadSummary) := do
+  let agentClause := match agentIdOpt with
+    | some agentId =>
+      s!" AND (m.sender_id = {agentId} OR EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id = m.id AND r.agent_id = {agentId}))"
+    | none => ""
+  let unreadSelect := match agentIdOpt with
+    | some agentId =>
+      s!"(SELECT COUNT(*) FROM messages mx JOIN message_recipients r ON mx.id = r.message_id WHERE mx.project_id = m.project_id AND mx.thread_id = m.thread_id AND r.agent_id = {agentId} AND r.read_at IS NULL) AS unread_count"
+    | none => "NULL AS unread_count"
+  let sql :=
+    s!"SELECT m.thread_id,
+              COUNT(*) AS message_count,
+              MAX(m.created_ts) AS last_created_ts,
+              (SELECT m2.id FROM messages m2 WHERE m2.project_id = m.project_id AND m2.thread_id = m.thread_id ORDER BY m2.created_ts DESC LIMIT 1) AS last_id,
+              (SELECT m2.subject FROM messages m2 WHERE m2.project_id = m.project_id AND m2.thread_id = m.thread_id ORDER BY m2.created_ts DESC LIMIT 1) AS last_subject,
+              (SELECT m2.body_md FROM messages m2 WHERE m2.project_id = m.project_id AND m2.thread_id = m.thread_id ORDER BY m2.created_ts DESC LIMIT 1) AS last_body,
+              (SELECT m2.importance FROM messages m2 WHERE m2.project_id = m.project_id AND m2.thread_id = m.thread_id ORDER BY m2.created_ts DESC LIMIT 1) AS last_importance,
+              (SELECT m2.ack_required FROM messages m2 WHERE m2.project_id = m.project_id AND m2.thread_id = m.thread_id ORDER BY m2.created_ts DESC LIMIT 1) AS last_ack_required,
+              (SELECT a.name FROM messages m2 JOIN agents a ON m2.sender_id = a.id WHERE m2.project_id = m.project_id AND m2.thread_id = m.thread_id ORDER BY m2.created_ts DESC LIMIT 1) AS last_sender,
+              {unreadSelect}
+       FROM messages m
+       WHERE m.project_id = {projectId} AND m.thread_id IS NOT NULL AND m.thread_id != ''{agentClause}
+       GROUP BY m.thread_id
+       ORDER BY last_created_ts DESC
+       LIMIT {limit}"
+  let rows ← db.query sql
+  pure (rows.filterMap rowToSummary)
+where
+  rowToSummary (row : Quarry.Row) : Option ThreadSummary := do
+    let threadId ← row.get? 0 >>= fun v => match v with | .text s => some s | _ => none
+    let messageCountInt ← row.get? 1 >>= fun v => match v with | .integer n => some n | _ => none
+    let lastCreatedTsInt ← row.get? 2 >>= fun v => match v with | .integer n => some n | _ => none
+    let lastMessageId ← row.get? 3 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let lastSubject ← row.get? 4 >>= fun v => match v with | .text s => some s | _ => none
+    let lastBodyMd : Option String := row.get? 5 >>= fun v => match v with | .text s => some s | _ => none
+    let lastImportanceStr ← row.get? 6 >>= fun v => match v with | .text s => some s | _ => none
+    let lastAckRequiredInt ← row.get? 7 >>= fun v => match v with | .integer n => some n | _ => none
+    let lastSenderName ← row.get? 8 >>= fun v => match v with | .text s => some s | _ => none
+    let unreadCount : Option Nat := row.get? 9 >>= fun v => match v with | .integer n => some n.toNat | _ => none
+    let importance := AgentMail.Importance.fromString? lastImportanceStr |>.getD .normal
+    some {
+      threadId
+      messageCount := messageCountInt.toNat
+      lastMessageId
+      lastSubject
+      lastSenderName
+      lastImportance := importance
+      lastAckRequired := lastAckRequiredInt != 0
+      lastCreatedTs := Chronos.Timestamp.fromSeconds lastCreatedTsInt
+      lastBodyMd
+      unreadCount
     }
 
 /-- Search messages using LIKE on subject and body -/

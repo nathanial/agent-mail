@@ -19,6 +19,7 @@ import AgentMail.Tools.Macros
 import AgentMail.Tools.BuildSlots
 import AgentMail.Tools.Products
 import AgentMail.Resources
+import AgentMail.Web.App
 
 open Citadel
 
@@ -244,9 +245,20 @@ def handleHealth (_req : ServerRequest) : IO Response := do
   pure (Response.json (Lean.Json.compress json))
 
 /-- Create and configure the server with middleware -/
-def create (cfg : Config) (db : Storage.Database) (rateLimitState : Middleware.RateLimit.RateLimitState) : Citadel.Server :=
+private def attachWebUi (server : Citadel.Server) (handler : Option Citadel.Handler) : Citadel.Server :=
+  match handler with
+  | none => server
+  | some h =>
+    server
+      |>.get "/app" h
+      |>.get "/app/*" h
+
+/-- Create and configure the server with middleware -/
+def create (cfg : Config) (db : Storage.Database) (rateLimitState : Middleware.RateLimit.RateLimitState)
+    (webHandler : Option Citadel.Handler := none) : Citadel.Server :=
   -- Build base server with routes
   let server := Citadel.Server.create { port := cfg.port, host := cfg.host }
+    |> (fun s => attachWebUi s webHandler)
     |>.post "/rpc" (handleMcpPost db cfg)
     |>.get "/rpc" (handleMcpGet cfg)
     |>.post "/mcp" (handleMcpPost db cfg)
@@ -258,6 +270,7 @@ def create (cfg : Config) (db : Storage.Database) (rateLimitState : Middleware.R
     |>.get "/resource/agents/:project_key" (Resources.Discovery.handleAgents db cfg)
     |>.get "/resource/identity/:project" (Resources.Discovery.handleIdentity db cfg)
     |>.get "/resource/product/:key" (Resources.Discovery.handleProduct db cfg)
+    |>.get "/resource/threads/:project_key" (Resources.Threads.handleThreads db cfg)
     -- Mail resources
     |>.get "/resource/message/:id" (Resources.Mail.handleMessage db cfg)
     |>.get "/resource/thread/:id" (Resources.Mail.handleThread db cfg)
@@ -292,6 +305,7 @@ def run (cfg : Config) (db : Storage.Database) : IO Unit := do
   IO.println s!"  Host: {cfg.host}"
   IO.println s!"  Port: {cfg.port}"
   IO.println s!"  Database: {cfg.databasePath}"
+  IO.println s!"  Web UI: http://{cfg.host}:{cfg.port}/app"
 
   -- Display security settings
   if cfg.http.bearerToken.isSome then
@@ -318,6 +332,7 @@ def run (cfg : Config) (db : Storage.Database) : IO Unit := do
   IO.println s!"  POST /rpc    - Legacy JSON-RPC + MCP endpoint"
   IO.println s!"  GET  /rpc    - MCP SSE (405: not supported)"
   IO.println s!"  GET  /health - Health check"
+  IO.println s!"  GET  /app    - Live web UI"
   IO.println ""
   IO.println s!"Resources:"
   IO.println s!"  GET  /resource/projects                    - List all projects"
@@ -325,6 +340,7 @@ def run (cfg : Config) (db : Storage.Database) : IO Unit := do
   IO.println s!"  GET  /resource/agents/:project_key         - Agents in project"
   IO.println s!"  GET  /resource/identity/:project           - Identity resolution"
   IO.println s!"  GET  /resource/product/:key                - Product with projects"
+  IO.println s!"  GET  /resource/threads/:project_key        - Thread summaries"
   IO.println s!"  GET  /resource/message/:id                 - Single message"
   IO.println s!"  GET  /resource/thread/:id                  - Thread messages"
   IO.println s!"  GET  /resource/inbox/:agent                - Agent inbox"
@@ -342,7 +358,19 @@ def run (cfg : Config) (db : Storage.Database) : IO Unit := do
   -- Initialize rate limit state
   let rateLimitState ← Middleware.RateLimit.RateLimitState.create
 
-  let server := create cfg db rateLimitState
+  -- Initialize Loom template manager for the web UI
+  let webApp := AgentMail.Web.buildApp
+  let stencilRef ← match webApp.stencilConfig with
+    | some config =>
+      IO.println s!"  Templates: Discovering from {config.templateDir}/"
+      let manager ← Loom.Stencil.Manager.discover config
+      IO.println s!"  Templates: {manager.templateCount} templates, {manager.partialCount} partials, {manager.layoutCount} layouts"
+      let ref ← IO.mkRef manager
+      pure (some ref)
+    | none => pure none
+
+  let webHandler := AgentMail.Web.buildHandler stencilRef
+  let server := create cfg db rateLimitState (some webHandler)
   server.run
 
 end AgentMail.Server

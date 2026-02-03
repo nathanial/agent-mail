@@ -29,6 +29,7 @@ import Tests.BuildSlots
 import Tests.Products
 import Tests.Resources.Discovery
 import Tests.Resources.Mail
+import Tests.Resources.Threads
 import Tests.Resources.Views
 import Tests.Resources.FileReservations
 import Tests.Middleware.Auth

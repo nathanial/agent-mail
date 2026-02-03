@@ -1,0 +1,65 @@
+<section class="hero">
+  <div>
+    <h1>Inbox telemetry in real time</h1>
+    <p>Agent Mail keeps threads, acknowledgements, and urgent items visible without opening the CLI. Select a project to see its live message flow.</p>
+  </div>
+  <div class="hero-card">
+    <div class="hero-stat" id="stat-projects">
+      <span class="hero-label">Projects</span>
+      <span class="hero-value">--</span>
+    </div>
+    <div class="hero-stat" id="stat-threads">
+      <span class="hero-label">Threads</span>
+      <span class="hero-value">--</span>
+    </div>
+    <div class="hero-stat" id="stat-unread">
+      <span class="hero-label">Unread</span>
+      <span class="hero-value">--</span>
+    </div>
+  </div>
+</section>
+
+<div class="grid">
+  <section class="panel" aria-label="Projects">
+    <div class="panel-header">
+      <div>
+        <h2>Projects</h2>
+        <p class="panel-subtitle">Workspace scopes</p>
+      </div>
+      <button class="ghost" id="refresh-projects" type="button">Refresh</button>
+    </div>
+    <div class="panel-body" id="project-list">
+      <div class="empty">Loading projects…</div>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="Threads">
+    <div class="panel-header">
+      <div>
+        <h2>Threads</h2>
+        <p class="panel-subtitle" id="thread-subtitle">Select a project to load mail</p>
+      </div>
+      <div class="panel-actions">
+        <button class="ghost" id="refresh-threads" type="button" disabled>Refresh</button>
+      </div>
+    </div>
+    <div class="panel-body" id="thread-list">
+      <div class="empty">No project selected</div>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="Thread detail">
+    <div class="panel-header">
+      <div>
+        <h2>Thread</h2>
+        <p class="panel-subtitle" id="thread-detail-subtitle">Pick a thread to read messages</p>
+      </div>
+      <div class="panel-actions">
+        <span class="chip" id="thread-meta">—</span>
+      </div>
+    </div>
+    <div class="panel-body" id="thread-detail">
+      <div class="empty">No thread selected</div>
+    </div>
+  </section>
+</div>

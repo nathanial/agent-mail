@@ -71,7 +71,7 @@ test "handleUrgentUnread returns empty list" := do
   resp.status.code ≡ (200 : UInt16)
   let json ← parseJsonResponse resp
   match json.getObjValAs? String "view" with
-  | Except.ok view => view ≡ "urgent-unread"
+  | Except.ok viewName => viewName ≡ "urgent-unread"
   | _ => throw (IO.userError "Expected view field")
   match json.getObjVal? "count" with
   | Except.ok (Lean.Json.num n) => n ≡ (0 : Nat)
@@ -89,7 +89,7 @@ test "handleAckRequired returns empty list" := do
   resp.status.code ≡ (200 : UInt16)
   let json ← parseJsonResponse resp
   match json.getObjValAs? String "view" with
-  | Except.ok view => view ≡ "ack-required"
+  | Except.ok viewName => viewName ≡ "ack-required"
   | _ => throw (IO.userError "Expected view field")
   db.close
 
@@ -104,7 +104,7 @@ test "handleAcksStale returns empty list" := do
   resp.status.code ≡ (200 : UInt16)
   let json ← parseJsonResponse resp
   match json.getObjValAs? String "view" with
-  | Except.ok view => view ≡ "acks-stale"
+  | Except.ok viewName => viewName ≡ "acks-stale"
   | _ => throw (IO.userError "Expected view field")
   db.close
 
@@ -119,7 +119,7 @@ test "handleAckOverdue returns empty list" := do
   resp.status.code ≡ (200 : UInt16)
   let json ← parseJsonResponse resp
   match json.getObjValAs? String "view" with
-  | Except.ok view => view ≡ "ack-overdue"
+  | Except.ok viewName => viewName ≡ "ack-overdue"
   | _ => throw (IO.userError "Expected view field")
   db.close
 

@@ -12,6 +12,7 @@ require chronos from git "https://github.com/nathanial/chronos-lean" @ "v0.0.7"
 require oracle from git "https://github.com/nathanial/oracle" @ "v0.2.0"
 require parlance from git "https://github.com/nathanial/parlance" @ "v0.0.6"
 require scribe from git "https://github.com/nathanial/scribe" @ "v0.0.2"
+require loom from "../../web/loom"
 require rune from "../../util/rune"
 
 @[default_target]
