@@ -5,9 +5,13 @@
     threads: [],
     currentProject: null,
     currentThread: null,
+    currentMessage: null,
     threadFilter: 'all',
     searchTerm: '',
     agentFilter: '',
+    mailboxMode: 'inbox',
+    mailboxMessages: [],
+    detailMode: 'thread',
   };
 
   const qs = (sel) => document.querySelector(sel);
@@ -18,10 +22,28 @@
   const projectList = qs('#project-list');
   const agentList = qs('#agent-list');
   const threadList = qs('#thread-list');
+  const mailboxList = qs('#mailbox-list');
   const threadDetail = qs('#thread-detail');
   const threadSubtitle = qs('#thread-subtitle');
   const threadDetailSubtitle = qs('#thread-detail-subtitle');
   const threadMeta = qs('#thread-meta');
+  const mailboxSubtitle = qs('#mailbox-subtitle');
+  const mailboxTabs = qsa('.tab-button');
+  const mailboxInboxButton = qs('#mailbox-inbox');
+  const mailboxOutboxButton = qs('#mailbox-outbox');
+  const composeOverlay = qs('#compose-overlay');
+  const openComposeButton = qs('#open-compose');
+  const closeComposeButton = qs('#close-compose');
+  const cancelComposeButton = qs('#cancel-compose');
+  const composeForm = qs('#compose-form');
+  const composeFromSelect = qs('#compose-from');
+  const composeToSelect = qs('#compose-to');
+  const composeSubject = qs('#compose-subject');
+  const composeBody = qs('#compose-body');
+  const composeImportance = qs('#compose-importance');
+  const composeAck = qs('#compose-ack');
+  const composeStatus = qs('#compose-status');
+  const sendComposeButton = qs('#send-compose');
   const refreshProjects = qs('#refresh-projects');
   const refreshAgents = qs('#refresh-agents');
   const refreshThreads = qs('#refresh-threads');
@@ -62,6 +84,22 @@
 
   const fetchJson = async (url) => {
     const resp = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`HTTP ${resp.status}: ${text || resp.statusText}`);
+    }
+    return resp.json();
+  };
+
+  const postJson = async (url, payload) => {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
     if (!resp.ok) {
       const text = await resp.text();
       throw new Error(`HTTP ${resp.status}: ${text || resp.statusText}`);
@@ -173,6 +211,95 @@
     agentSelect.value = state.agentFilter;
   };
 
+  const populateComposeOptions = () => {
+    if (!composeFromSelect || !composeToSelect) return;
+    composeFromSelect.innerHTML = '';
+    composeToSelect.innerHTML = '';
+    state.agents.forEach((agent) => {
+      const fromOption = document.createElement('option');
+      fromOption.value = agent.name;
+      fromOption.textContent = agent.name;
+      composeFromSelect.appendChild(fromOption);
+      const toOption = document.createElement('option');
+      toOption.value = agent.name;
+      toOption.textContent = agent.name;
+      composeToSelect.appendChild(toOption);
+    });
+    if (state.agentFilter) {
+      composeToSelect.value = state.agentFilter;
+    }
+    if (!composeFromSelect.value && state.agents.length > 0) {
+      composeFromSelect.value = state.agents[0].name;
+    }
+  };
+
+  const renderMailbox = () => {
+    if (!mailboxList) return;
+    if (!state.currentProject) {
+      setEmpty(mailboxList, 'Select a project to view mail');
+      return;
+    }
+    if (!state.agentFilter) {
+      setEmpty(mailboxList, 'Select an agent to view mail');
+      return;
+    }
+    if (state.mailboxMessages.length === 0) {
+      setEmpty(mailboxList, `No ${state.mailboxMode} mail for ${state.agentFilter}`);
+      return;
+    }
+
+    mailboxList.innerHTML = '';
+    state.mailboxMessages.forEach((msg) => {
+      const item = document.createElement('div');
+      item.className = 'list-item';
+      if (state.currentMessage && msg.id === state.currentMessage.id) {
+        item.classList.add('active');
+      }
+
+      const importance = msg.importance || 'normal';
+      const metaParts = [];
+      if (state.mailboxMode === 'inbox') {
+        metaParts.push(msg.sender_name || 'Unknown');
+        metaParts.push(formatTime(msg.created_ts));
+      } else {
+        const recipients = Array.isArray(msg.recipients) ? msg.recipients.join(', ') : 'No recipients';
+        metaParts.push(`To: ${recipients}`);
+        metaParts.push(formatTime(msg.created_ts));
+      }
+      if (msg.thread_id) {
+        metaParts.push(`Thread ${msg.thread_id}`);
+      }
+      if (importance !== 'normal') {
+        metaParts.push(importance);
+      }
+
+      const metaHtml = metaParts.map((part) => `<span>${escapeHtml(part)}</span>`).join('');
+      const badges = [];
+      if (msg.ack_required) {
+        badges.push('<span class="badge">Ack required</span>');
+      }
+      if (importance === 'urgent') {
+        badges.push('<span class="badge badge-urgent">Urgent</span>');
+      }
+      if (state.mailboxMode === 'inbox' && !msg.read_at) {
+        badges.push('<span class="badge badge-alert">Unread</span>');
+      }
+      if (state.mailboxMode === 'inbox' && msg.ack_required && !msg.acked_at) {
+        badges.push('<span class="badge badge-alert">Awaiting ack</span>');
+      }
+
+      item.innerHTML = `
+        <div class="list-title">${escapeHtml(msg.subject || 'Untitled')}</div>
+        <div class="list-meta">
+          ${metaHtml}
+          ${badges.join('')}
+        </div>
+      `;
+      item.addEventListener('click', () => selectMailboxMessage(msg));
+      mailboxList.appendChild(item);
+    });
+  };
+
   const renderThreads = () => {
     if (!threadList) return;
     if (!state.currentProject) {
@@ -271,6 +398,44 @@
     });
   };
 
+  const renderMessageDetail = (msg) => {
+    if (!threadDetail) return;
+    if (!msg) {
+      setEmpty(threadDetail, 'No message selected');
+      return;
+    }
+    threadDetail.innerHTML = '';
+    const card = document.createElement('div');
+    card.className = 'message';
+    const subject = msg.subject || 'Untitled';
+    const sender = msg.sender_name || 'Unknown';
+    const timestamp = formatTime(msg.created_ts);
+    const body = msg.body_md || '';
+    const tags = [];
+    if (msg.ack_required) {
+      tags.push('<span class="badge">Ack required</span>');
+    }
+    if (msg.importance && msg.importance !== 'normal') {
+      const tagClass = msg.importance === 'urgent' ? 'badge badge-urgent' : 'badge';
+      tags.push(`<span class="${tagClass}">${escapeHtml(msg.importance)}</span>`);
+    }
+    card.innerHTML = `
+      <div class="message-header">
+        <div>
+          <div class="message-title">${escapeHtml(subject)}</div>
+          <div class="message-meta">${escapeHtml(sender)} • ${escapeHtml(timestamp)}</div>
+          <div class="message-tags">${tags.join('')}</div>
+        </div>
+      </div>
+      <div class="message-body"></div>
+    `;
+    const bodyEl = card.querySelector('.message-body');
+    if (bodyEl) {
+      bodyEl.textContent = body;
+    }
+    threadDetail.appendChild(card);
+  };
+
   const updateStats = () => {
     if (statProjects) statProjects.textContent = `${state.projects.length}`;
     if (statAgents) statAgents.textContent = `${state.agents.length}`;
@@ -287,7 +452,95 @@
       agentSelect.value = agentName;
     }
     renderAgents();
+    await loadMailbox(state.currentProject);
     await loadThreads(state.currentProject);
+  };
+
+  const setMailboxMode = async (mode) => {
+    state.mailboxMode = mode;
+    mailboxTabs.forEach((tab) => {
+      tab.classList.toggle('active', tab.dataset.mode === mode);
+    });
+    if (mailboxSubtitle && state.agentFilter) {
+      mailboxSubtitle.textContent = `${mode === 'inbox' ? 'Inbox' : 'Outbox'} for ${state.agentFilter}`;
+    }
+    await loadMailbox(state.currentProject);
+  };
+
+  const openCompose = () => {
+    if (!composeOverlay) return;
+    if (!state.currentProject) {
+      setStatus('Select a project first', false);
+      return;
+    }
+    if (state.agents.length === 0) {
+      setStatus('No agents available to send mail', false);
+      return;
+    }
+    populateComposeOptions();
+    if (composeStatus) composeStatus.textContent = '';
+    if (composeSubject) composeSubject.value = '';
+    if (composeBody) composeBody.value = '';
+    if (composeImportance) composeImportance.value = 'normal';
+    if (composeAck) composeAck.checked = false;
+    composeOverlay.classList.add('open');
+    composeOverlay.setAttribute('aria-hidden', 'false');
+  };
+
+  const closeCompose = () => {
+    if (!composeOverlay) return;
+    composeOverlay.classList.remove('open');
+    composeOverlay.setAttribute('aria-hidden', 'true');
+  };
+
+  const sendCompose = async () => {
+    if (!state.currentProject) return;
+    const from = composeFromSelect?.value || '';
+    const to = composeToSelect?.value || '';
+    const subject = composeSubject?.value?.trim() || '';
+    const body = composeBody?.value?.trim() || '';
+    const importance = composeImportance?.value || 'normal';
+    const ackRequired = composeAck?.checked || false;
+
+    if (!from || !to || !subject || !body) {
+      if (composeStatus) composeStatus.textContent = 'Please fill in from, to, subject, and message.';
+      return;
+    }
+
+    if (sendComposeButton) sendComposeButton.disabled = true;
+    if (composeStatus) composeStatus.textContent = 'Sending...';
+
+    try {
+      const payload = {
+        jsonrpc: '2.0',
+        id: Date.now(),
+        method: 'send_message',
+        params: {
+          project_key: state.currentProject.slug,
+          sender_name: from,
+          to: [to],
+          subject,
+          body_md: body,
+          importance,
+          ack_required: ackRequired,
+        },
+      };
+      const response = await postJson('/rpc', payload);
+      if (response.error) {
+        throw new Error(response.error.message || 'Send failed');
+      }
+      if (composeStatus) composeStatus.textContent = 'Sent.';
+      closeCompose();
+      await loadThreads(state.currentProject);
+      if (state.agentFilter) {
+        await loadMailbox(state.currentProject);
+      }
+    } catch (err) {
+      console.error(err);
+      if (composeStatus) composeStatus.textContent = 'Failed to send message.';
+    } finally {
+      if (sendComposeButton) sendComposeButton.disabled = false;
+    }
   };
 
   const setThreadFilter = (filter) => {
@@ -301,28 +554,42 @@
   const selectProject = async (project) => {
     state.currentProject = project;
     state.currentThread = null;
+    state.currentMessage = null;
     state.agentFilter = '';
     state.searchTerm = '';
     state.threadFilter = 'all';
+    state.mailboxMode = 'inbox';
+    state.mailboxMessages = [];
+    state.detailMode = 'thread';
     if (threadSearch) threadSearch.value = '';
     setThreadFilter('all');
+    mailboxTabs.forEach((tab) => {
+      tab.classList.toggle('active', tab.dataset.mode === state.mailboxMode);
+    });
     renderProjects();
     if (threadSubtitle) {
       threadSubtitle.textContent = `Project: ${project.human_key || project.slug}`;
     }
     if (threadDetailSubtitle) {
-      threadDetailSubtitle.textContent = 'Pick a thread to read messages';
+      threadDetailSubtitle.textContent = 'Pick a thread or mailbox message';
     }
     if (threadMeta) {
       threadMeta.textContent = '—';
     }
-    setEmpty(threadDetail, 'No thread selected');
+    setEmpty(threadDetail, 'No detail selected');
+    if (mailboxSubtitle) {
+      mailboxSubtitle.textContent = 'Select an agent to view mail';
+    }
+    renderMailbox();
     await loadAgents(project);
+    await loadMailbox(project);
     await loadThreads(project);
   };
 
   const selectThread = async (thread) => {
     state.currentThread = thread;
+    state.currentMessage = null;
+    state.detailMode = 'thread';
     renderThreads();
     if (threadDetailSubtitle) {
       threadDetailSubtitle.textContent = thread.last_subject || 'Thread detail';
@@ -333,6 +600,20 @@
       threadMeta.textContent = `${thread.message_count} messages · ${ack} · ${unread} unread`;
     }
     await loadThreadMessages(thread);
+  };
+
+  const selectMailboxMessage = async (message) => {
+    state.currentMessage = message;
+    state.detailMode = 'message';
+    renderMailbox();
+    if (threadDetailSubtitle) {
+      threadDetailSubtitle.textContent = message.subject || 'Message detail';
+    }
+    if (threadMeta) {
+      const from = message.sender_name ? `From ${message.sender_name}` : 'Message';
+      threadMeta.textContent = `${from} · ${formatTime(message.created_ts)}`;
+    }
+    await loadMessageDetail(message.id);
   };
 
   const loadProjects = async () => {
@@ -361,6 +642,7 @@
       const payload = await fetchJson(`/resource/agents/${encodeURIComponent(project.slug)}`);
       state.agents = payload.agents || [];
       populateAgentSelect();
+      populateComposeOptions();
       renderAgents();
       updateStats();
       setStatus('Connected', true);
@@ -370,6 +652,38 @@
       setEmpty(agentList, 'Failed to load agents');
     } finally {
       if (refreshAgents) refreshAgents.disabled = false;
+    }
+  };
+
+  const loadMailbox = async (project) => {
+    if (!project) return;
+    if (!state.agentFilter) {
+      state.mailboxMessages = [];
+      if (mailboxSubtitle) {
+        mailboxSubtitle.textContent = 'Select an agent to view mail';
+      }
+      renderMailbox();
+      return;
+    }
+    setStatus(`Loading ${state.mailboxMode}`, false);
+    try {
+      const endpoint = state.mailboxMode === 'outbox' ? 'outbox' : 'inbox';
+      const params = new URLSearchParams({
+        project: project.slug,
+        limit: '50',
+        include_bodies: 'false',
+      });
+      const payload = await fetchJson(`/resource/${endpoint}/${encodeURIComponent(state.agentFilter)}?${params.toString()}`);
+      state.mailboxMessages = payload.messages || [];
+      if (mailboxSubtitle) {
+        mailboxSubtitle.textContent = `${state.mailboxMode === 'outbox' ? 'Outbox' : 'Inbox'} for ${payload.agent_name || state.agentFilter}`;
+      }
+      renderMailbox();
+      setStatus('Connected', true);
+    } catch (err) {
+      console.error(err);
+      setStatus('Offline', false);
+      setEmpty(mailboxList, `Failed to load ${state.mailboxMode}`);
     }
   };
 
@@ -411,9 +725,45 @@
     }
   };
 
+  const loadMessageDetail = async (messageId) => {
+    if (!messageId || !state.currentProject) return;
+    setStatus('Loading message', false);
+    try {
+      const url = `/resource/message/${encodeURIComponent(messageId)}?project=${encodeURIComponent(state.currentProject.slug)}`;
+      const payload = await fetchJson(url);
+      renderMessageDetail(payload);
+      if (threadMeta) {
+        const from = payload.sender_name ? `From ${payload.sender_name}` : 'Message';
+        threadMeta.textContent = `${from} · ${formatTime(payload.created_ts)}`;
+      }
+      if (threadDetailSubtitle) {
+        threadDetailSubtitle.textContent = payload.subject || 'Message detail';
+      }
+      setStatus('Connected', true);
+    } catch (err) {
+      console.error(err);
+      setStatus('Offline', false);
+      setEmpty(threadDetail, 'Failed to load message');
+    }
+  };
+
   refreshProjects?.addEventListener('click', loadProjects);
   refreshAgents?.addEventListener('click', () => loadAgents(state.currentProject));
   refreshThreads?.addEventListener('click', () => loadThreads(state.currentProject));
+  mailboxInboxButton?.addEventListener('click', () => setMailboxMode('inbox'));
+  mailboxOutboxButton?.addEventListener('click', () => setMailboxMode('outbox'));
+  openComposeButton?.addEventListener('click', openCompose);
+  closeComposeButton?.addEventListener('click', closeCompose);
+  cancelComposeButton?.addEventListener('click', closeCompose);
+  composeOverlay?.addEventListener('click', (event) => {
+    if (event.target === composeOverlay) {
+      closeCompose();
+    }
+  });
+  composeForm?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    sendCompose();
+  });
 
   threadSearch?.addEventListener('input', (event) => {
     state.searchTerm = event.target.value || '';
@@ -449,8 +799,14 @@
       return;
     }
     await loadThreads(state.currentProject);
+    if (state.agentFilter) {
+      await loadMailbox(state.currentProject);
+    }
     if (state.currentThread && payload.thread_id && state.currentThread.thread_id === payload.thread_id) {
       await loadThreadMessages(state.currentThread);
+    }
+    if (state.currentMessage && payload.message_id && state.currentMessage.id === payload.message_id) {
+      await loadMessageDetail(state.currentMessage.id);
     }
   };
 

@@ -90,6 +90,16 @@ body {
   box-shadow: var(--shadow);
 }
 
+.topbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.compose-button {
+  white-space: nowrap;
+}
+
 .brand {
   display: flex;
   align-items: center;
@@ -216,10 +226,10 @@ body {
 .dashboard {
   display: grid;
   gap: 20px;
-  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr) minmax(320px, 1.05fr);
   grid-template-areas:
-    "projects threads"
-    "agents detail";
+    "projects threads detail"
+    "agents mailbox detail";
   margin-top: 24px;
 }
 
@@ -233,6 +243,10 @@ body {
 
 .panel-threads {
   grid-area: threads;
+}
+
+.panel-mailbox {
+  grid-area: mailbox;
 }
 
 .panel-thread-detail {
@@ -290,6 +304,145 @@ body {
   gap: 12px;
   grid-template-columns: minmax(0, 1fr);
   margin-top: 16px;
+}
+
+.tab-group {
+  display: inline-flex;
+  background: rgba(26, 30, 34, 0.06);
+  padding: 4px;
+  border-radius: 999px;
+  gap: 4px;
+}
+
+.tab-button {
+  border: none;
+  background: transparent;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  color: var(--muted);
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.tab-button.active {
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+  box-shadow: 0 8px 18px rgba(26, 30, 34, 0.12);
+}
+
+.compose-overlay {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(26, 30, 34, 0.4);
+  backdrop-filter: blur(6px);
+  z-index: 10;
+}
+
+.compose-overlay.open {
+  display: flex;
+}
+
+.compose-panel {
+  width: min(720px, 92vw);
+  background: var(--panel);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--shadow);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.compose-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.compose-form {
+  display: grid;
+  gap: 16px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.form-field span {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.7rem;
+}
+
+.form-field input,
+.form-field textarea,
+.form-field select {
+  border: 1px solid rgba(26, 30, 34, 0.12);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  font-size: 0.95rem;
+  font-family: var(--font-ui);
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.form-field textarea {
+  resize: vertical;
+}
+
+.compose-row {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  align-items: center;
+}
+
+.checkbox-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.checkbox-field span {
+  margin-right: auto;
+}
+
+.compose-status {
+  font-size: 0.85rem;
+  color: var(--muted);
+  min-height: 20px;
+}
+
+.compose-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.primary {
+  border: none;
+  background: linear-gradient(135deg, var(--accent), #f2a35c);
+  color: #fff;
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  box-shadow: 0 10px 24px rgba(200, 103, 42, 0.3);
+  transition: transform 0.2s ease;
+}
+
+.primary:hover {
+  transform: translateY(-1px);
 }
 
 .search-field,
@@ -529,6 +682,11 @@ body {
     align-items: flex-start;
   }
 
+  .topbar-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
   .hero {
     flex-direction: column;
     align-items: flex-start;
@@ -545,6 +703,7 @@ body {
       "projects"
       "agents"
       "threads"
+      "mailbox"
       "detail";
   }
 }
